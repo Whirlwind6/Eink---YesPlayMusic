@@ -102,11 +102,15 @@
           二维码登录
         </a>
       </div>
+      <!-- 下面是 locale 里的静态文案（内含 <br /> 与源码仓库链接），不含任何用户输入，
+           拆成结构化节点要同步改四种语言、收益不抵成本，故按可信模板处理。 -->
+      <!-- eslint-disable vue/no-v-html -->
       <div
         v-show="mode !== 'qrCode'"
         class="notice"
         v-html="isElectron ? $t('login.noticeElectron') : $t('login.notice')"
       ></div>
+      <!-- eslint-enable vue/no-v-html -->
     </div>
   </div>
 </template>

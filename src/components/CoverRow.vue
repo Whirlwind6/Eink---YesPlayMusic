@@ -30,7 +30,12 @@
           <router-link :to="getTitleLink(item)">{{ item.name }}</router-link>
         </div>
         <div v-if="type !== 'artist' && subText !== 'none'" class="info">
-          <span v-html="getSubText(item)"></span>
+          <router-link
+            v-if="subText === 'artist' && artistInfo(item)"
+            :to="`/artist/${artistInfo(item).id}`"
+            >{{ artistInfo(item).name }}</router-link
+          >
+          <span v-else-if="subText !== 'artist'">{{ getSubText(item) }}</span>
         </div>
       </div>
     </div>
@@ -73,12 +78,6 @@ export default {
       if (this.subText === 'creator') return 'by ' + item.creator.nickname;
       if (this.subText === 'releaseYear')
         return new Date(item.publishTime).getFullYear();
-      if (this.subText === 'artist') {
-        if (item.artist !== undefined)
-          return `<a href="/artist/${item.artist.id}">${item.artist.name}</a>`;
-        if (item.artists !== undefined)
-          return `<a href="/artist/${item.artists[0].id}">${item.artists[0].name}</a>`;
-      }
       if (this.subText === 'albumType+releaseYear') {
         let albumType = item.type;
         if (item.type === 'EP/Single') {
@@ -91,6 +90,16 @@ export default {
         return `${albumType} · ${new Date(item.publishTime).getFullYear()}`;
       }
       if (this.subText === 'appleMusic') return 'by Apple Music';
+      return '';
+    },
+    // 歌手副标题单独取，模板里用 router-link 渲染。
+    // 早先这里拼 `<a href>` 字符串交给 v-html，既有 XSS 告警，点击又会整页刷新。
+    artistInfo(item) {
+      if (item.artist !== undefined) return item.artist;
+      if (item.artists !== undefined && item.artists.length > 0) {
+        return item.artists[0];
+      }
+      return null;
     },
     isPrivacy(item) {
       return this.type === 'playlist' && item.privacy === 10;

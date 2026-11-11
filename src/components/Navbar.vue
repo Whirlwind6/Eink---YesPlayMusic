@@ -49,6 +49,27 @@
           loading="lazy"
           @click="showUserProfileMenu"
         />
+        <!-- 【墨水屏】.avatar 被 eink.scss 整块隐藏，而它是原版唯一的用户菜单入口，
+             隐藏后登录和设置就彻底点不到了。这里补一排文字按钮顶上：
+             未登录是「登录」，已登录是「登出」，右侧固定一个「设置」。 -->
+        <div v-if="EINK && !isLoginPage" class="eink-entries">
+          <span v-if="isLooseLoggedIn && userName" class="eink-user">{{
+            userName
+          }}</span>
+          <button
+            class="eink-entry"
+            @click="isLooseLoggedIn ? logout() : toLogin()"
+          >
+            {{
+              isLooseLoggedIn
+                ? $t('library.userProfileMenu.logout')
+                : $t('login.login')
+            }}
+          </button>
+          <button class="eink-entry" @click="toSettings">
+            {{ $t('library.userProfileMenu.settings') }}
+          </button>
+        </div>
       </div>
     </nav>
 
@@ -77,6 +98,7 @@
 <script>
 import { mapState } from 'vuex';
 import { isLooseLoggedIn, doLogout } from '@/utils/auth';
+import { EINK } from '@/utils/eink';
 
 // import icons for win32 title bar
 // icons by https://github.com/microsoft/vscode-codicons
@@ -97,6 +119,7 @@ export default {
   },
   data() {
     return {
+      EINK,
       inputFocus: false,
       langs: ['zh-CN', 'zh-TW', 'en', 'tr'],
       keywords: '',
@@ -108,6 +131,15 @@ export default {
     ...mapState(['settings', 'data']),
     isLooseLoggedIn() {
       return isLooseLoggedIn();
+    },
+    userName() {
+      return this.data?.user?.nickname ?? '';
+    },
+    // 登录页本身就有入口，再摆一个「登录」按钮纯属干扰
+    isLoginPage() {
+      return ['login', 'loginUsername', 'loginAccount'].includes(
+        this.$route.name
+      );
     },
     avatarUrl() {
       return this.data?.user?.avatarUrl && this.isLooseLoggedIn
@@ -344,6 +376,47 @@ nav.has-custom-titlebar {
   .search-button {
     display: none;
     -webkit-app-region: no-drag;
+  }
+}
+
+/* 【墨水屏】头像隐藏后补的文字入口：细描边按钮，不用投影和过渡，
+   墨水屏上过渡动画只会糊成一团灰。 */
+.eink-entries {
+  display: flex;
+  align-items: center;
+  margin-left: 14px;
+  -webkit-app-region: no-drag;
+}
+
+.eink-user {
+  max-width: 110px;
+  margin-right: 8px;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.eink-entry {
+  margin-left: 8px;
+  padding: 5px 12px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid var(--color-text);
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+
+  &:first-of-type {
+    margin-left: 0;
+  }
+
+  &:hover {
+    background: var(--color-secondary-bg);
   }
 }
 </style>

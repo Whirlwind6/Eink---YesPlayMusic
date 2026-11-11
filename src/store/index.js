@@ -4,6 +4,7 @@ import state from './state';
 import mutations from './mutations';
 import actions from './actions';
 import { changeAppearance, changeThemeColor } from '@/utils/common';
+import { EINK } from '@/utils/eink';
 import Player from '@/utils/Player';
 // vuex 自定义插件
 import saveToLocalStorage from './plugins/localStorage';
@@ -24,6 +25,20 @@ const options = {
 };
 
 const store = new Vuex.Store(options);
+
+// 【墨水屏】首页 "by Apple Music" 歌单默认关闭。
+// 新装用户由 initLocalStorage 的默认值兜住；但老版本已经把 true 写进 localStorage，
+// 直接改默认值对升级用户无效，所以这里做一次性迁移：
+//   首次启动 → 强制关掉并打标记；之后用户在设置里手动打开，不会被再次覆盖。
+if (EINK && localStorage.getItem('einkDefaultsApplied') !== '1') {
+  if (store.state.settings.showPlaylistsByAppleMusic !== false) {
+    store.commit('updateSettings', {
+      key: 'showPlaylistsByAppleMusic',
+      value: false,
+    });
+  }
+  localStorage.setItem('einkDefaultsApplied', '1');
+}
 
 if ([undefined, null].includes(store.state.settings.lang)) {
   const defaultLang = 'en';

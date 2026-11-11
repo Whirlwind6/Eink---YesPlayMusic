@@ -1079,7 +1079,8 @@ export default {
     },
     showPlaylistsByAppleMusic: {
       get() {
-        if (this.settings.showPlaylistsByAppleMusic === undefined) return true;
+        // 【墨水屏】默认关闭，见 home.vue 与 store/initLocalStorage.js
+        if (this.settings.showPlaylistsByAppleMusic === undefined) return false;
         return this.settings.showPlaylistsByAppleMusic;
       },
       set(value) {
