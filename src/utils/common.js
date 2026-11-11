@@ -1,3 +1,4 @@
+import { EINK } from './eink';
 import { isAccountLoggedIn } from './auth';
 import { refreshCookie } from '@/api/auth';
 import dayjs from 'dayjs';
@@ -64,6 +65,19 @@ const themeColorPresets = {
 
 export function changeThemeColor(themeColor, appearance) {
   if (typeof document === 'undefined') return;
+  // 【墨水屏】强调色钉成纯黑。
+  //
+  // 上游 6 套主题色（蓝/日落/海洋/森林）在 16 级灰阶上都会被压成同一片中灰，
+  // 而白字压在中灰上对比度不足——按钮、选中项、进度条都靠这个色。
+  // 纯黑 + 白字是墨水屏唯一稳定的组合。
+  if (EINK) {
+    const target = document.body || document.documentElement;
+    target.style.setProperty('--color-primary', '#000000');
+    target.style.setProperty('--color-primary-bg', '#ededed');
+    target.style.setProperty('--color-primary-bg-for-transparent', '#ededed');
+    target.style.setProperty('--color-primary-gradient', '#000000');
+    return;
+  }
   const resolvedAppearance =
     appearance || document.body?.getAttribute('data-theme') || 'light';
   const resolvedTheme = themeColorPresets[themeColor] ? themeColor : 'default';
@@ -193,6 +207,12 @@ export function dailyTask() {
 }
 
 export function changeAppearance(appearance) {
+  // 【墨水屏】强制浅色。
+  //
+  // 上游默认 appearance='auto'，会跟随系统 prefers-color-scheme；墨水屏设备
+  // 常年锁在深色省电模式，跟随系统等于把整个界面拉回黑底。这里连同设置页里
+  // 的"深色"选项一起失效（设置页已把该下拉隐藏），保证任何路径都落在浅色。
+  if (EINK) appearance = 'light';
   if (appearance === 'auto' || appearance === undefined) {
     appearance = window.matchMedia('(prefers-color-scheme: dark)').matches
       ? 'dark'

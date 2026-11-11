@@ -1,0 +1,259 @@
+/**
+ * 墨水屏（E-Ink）适配样式层。
+ *
+ * 全部规则挂在 `html.eink` 下，由 `main.js` 在启动时给根元素加 class。
+ * 关掉 `src/utils/eink.js` 里的 EINK 开关即可整体失效，回到上游外观。
+ *
+ * 为什么集中在这一层做：
+ *   YesPlayMusic 的深色/封面/模糊分散在 40 多个 scoped 组件里，逐个改 Vue
+ *   模板会牵动布局与交互；而它的主题本来就是 CSS 变量驱动，用一层全局覆盖
+ *   既能一次生效，也便于日后同步上游（只冲突这一个新文件）。
+ */
+
+html.eink {
+  /* ============================================================
+   * 1. 调色板：纯白底 + 纯黑字 + 单色强调
+   * ============================================================ */
+  --color-body-bg: #ffffff;
+  --color-text: #000000;
+  --color-primary: #000000;
+  --color-primary-bg: #ededed;
+  --color-primary-gradient: #000000;
+  --color-secondary: #3c3c3c;
+  --color-secondary-bg: #f0f0f0;
+  --color-navbar-bg: #ffffff;
+  --color-primary-bg-for-transparent: #ededed;
+  --color-secondary-bg-for-transparent: #f0f0f0;
+}
+
+/**
+ * 强制浅色。
+ *
+ * 软件默认 `appearance: auto` 会跟随系统，而墨水屏设备常年在深色省电模式下，
+ * 直接跟随等于把整个界面拉回黑底。`common.js` 里已在 JS 层把它钉成 light，
+ * 这里再兜一层 CSS：即使某个页面自己写了 `data-theme="dark"`（如歌词页、
+ * FM 卡片），变量也会被这组声明覆盖回白底黑字。
+ */
+html.eink body[data-theme='dark'],
+html.eink .lyrics-page[data-theme='dark'],
+html.eink [data-theme='dark']:not(.fm) {
+  --color-body-bg: #ffffff;
+  --color-text: #000000;
+  --color-primary: #000000;
+  --color-primary-bg: #ededed;
+  --color-primary-gradient: #000000;
+  --color-secondary: #3c3c3c;
+  --color-secondary-bg: #f0f0f0;
+  --color-navbar-bg: #ffffff;
+  --color-primary-bg-for-transparent: #ededed;
+  --color-secondary-bg-for-transparent: #f0f0f0;
+}
+
+html.eink body {
+  background-color: #ffffff;
+  color: #000000;
+}
+
+/* ============================================================
+ * 2. 封面：整体移除，不留占位
+ *
+ *   `.cover` 是 Cover.vue / FMCard / MvRow / artist / lyrics 共用的封面类名。
+ *   这些封面都是 `aspect-ratio: 1/1` 撑出高度的，容器本身没有固定尺寸，
+ *   所以 display:none 之后会自然塌陷，不会留下空白方块——这正是"只留文字"
+ *   能成立的原因。
+ * ============================================================ */
+html.eink .cover,
+html.eink .cover-row .cover,
+html.eink .lyrics-page .cover,
+html.eink .track > img,
+html.eink .artist-info .head,
+html.eink .avatar,
+html.eink .daily-recommend-card > img,
+html.eink .playing .container > img {
+  display: none !important;
+}
+
+/* 封面投影（blur 出来的那层）在墨水屏上是一圈脏灰，一并去掉 */
+html.eink .shadow {
+  display: none !important;
+}
+
+/* ============================================================
+ * 3. 网格卡片：封面移除后改成紧凑的文字目录
+ *
+ *   CoverRow 的列数与 gap 是内联 style，必须用 !important 覆盖。
+ *   默认 `gap: 44px 24px` 是给"封面 + 两行文字"留呼吸的，只剩文字时
+ *   44px 的行距会让每一条都像悬在空中，所以收到 12px。
+ * ============================================================ */
+html.eink .cover-row {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)) !important;
+  gap: 12px 20px !important;
+}
+
+html.eink .cover-row .item .text {
+  margin-top: 0 !important;
+}
+
+/* 纯文字没有封面做视觉锚点，用一条细线把相邻条目分开 */
+html.eink .cover-row .item {
+  padding-bottom: 10px;
+  border-bottom: 1px solid #dcdcdc;
+}
+
+/* 首页各区块之间的 54px 间距同步收紧 */
+html.eink .index-row {
+  margin-top: 26px !important;
+}
+
+html.eink .index-row .title {
+  margin-bottom: 12px !important;
+}
+
+/* ============================================================
+ * 4. 顶栏 / 底栏：毛玻璃 → 纯白 + 一条实线
+ * ============================================================ */
+html.eink nav {
+  backdrop-filter: none !important;
+  background-color: #ffffff !important;
+  border-bottom: 1px solid #000000;
+}
+
+html.eink .player {
+  backdrop-filter: none !important;
+  background-color: #ffffff !important;
+  border-top: 1px solid #000000;
+  box-shadow: none !important;
+}
+
+/* 底栏封面移除后，歌曲信息贴左边，那 12px 的左缩进会显得突兀 */
+html.eink .playing .track-info {
+  margin-left: 0 !important;
+}
+
+/* ============================================================
+ * 5. 弹层：去掉模糊与半透明，改成白底 + 描边
+ * ============================================================ */
+html.eink .modal,
+html.eink .menu,
+html.eink .toast {
+  backdrop-filter: none !important;
+  background: #ffffff !important;
+  border: 1px solid #000000 !important;
+  box-shadow: none !important;
+}
+
+html.eink .shade {
+  background: #ffffff !important;
+  backdrop-filter: none !important;
+}
+
+/* ============================================================
+ * 6. 歌词页（全屏播放）
+ *
+ *   上游有三种背景：封面模糊、封面旋转、封面取色渐变。全部关掉。
+ *   大封面也去掉，左侧只剩日期 + 控制条 + 歌曲信息。
+ * ============================================================ */
+html.eink .lyrics-page {
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+
+html.eink .lyrics-background,
+html.eink .gradient-background {
+  display: none !important;
+}
+
+/* ============================================================
+ * 7. 详情页头部：大图移除后清掉为它预留的缩进
+ * ============================================================ */
+html.eink .playlist-info .info {
+  margin-left: 0 !important;
+}
+
+html.eink .playlist-info {
+  margin-bottom: 32px !important;
+}
+
+html.eink .album-page .title,
+html.eink .artist-page .name {
+  font-size: 40px !important;
+}
+
+/* ============================================================
+ * 8. 两张功能卡（每日推荐 / 私人 FM）
+ *
+ *   它们的底原本是封面图或封面取色渐变，图去掉后是纯白，
+ *   在白页面上会"消失"，给一条描边换回边界。
+ * ============================================================ */
+html.eink .daily-recommend-card,
+html.eink .fm {
+  background: #ffffff !important;
+  background-image: none !important;
+  border: 1px solid #000000 !important;
+  box-shadow: none !important;
+}
+
+/* FM 卡片自带 data-theme="dark"，文字色是白的，必须显式改黑。
+   注意要连变量一起改：卡片内部很多子元素读的是 var(--color-text)，
+   只改 color 属性盖不住它们。 */
+html.eink .fm {
+  --color-text: #000000;
+  --color-secondary-bg: #f0f0f0;
+  --color-secondary: #3c3c3c;
+  color: #000000 !important;
+}
+
+html.eink .fm .title,
+html.eink .fm .artist,
+html.eink .fm .info,
+html.eink .fm .card-name,
+html.eink .fm button,
+html.eink .fm .svg-icon {
+  color: #000000 !important;
+}
+
+/* 每日推荐卡片：整张卡原本是封面图 + 左侧半透明黑渐变 + 白字。
+   图去掉后渐变会变成白底上的一条灰带，白字直接看不见。 */
+html.eink .daily-recommend-card .container {
+  background: none !important;
+  width: 100% !important;
+}
+
+html.eink .daily-recommend-card .title-box {
+  color: #000000 !important;
+}
+
+html.eink .daily-recommend-card .play-button {
+  color: #000000 !important;
+  background: #ffffff !important;
+  border: 1px solid #000000 !important;
+  backdrop-filter: none !important;
+}
+
+/* ============================================================
+ * 9. 零散效果清理
+ * ============================================================ */
+/* 进度条 / 加载条：上游是 #29d 蓝色，墨水上会变中灰 */
+html.eink #nprogress .bar {
+  background: #000000 !important;
+}
+
+/* 按钮投影在墨水屏上是一圈灰边 */
+html.eink button,
+html.eink .button {
+  box-shadow: none !important;
+}
+
+/* 输入框：底色与边框 */
+html.eink input,
+html.eink select {
+  background-color: #ffffff !important;
+  border: 1px solid #000000 !important;
+  color: #000000 !important;
+}
+
+/* 选中/悬停态统一成浅灰，不用半透明叠加 */
+html.eink .menu .item:hover,
+html.eink .track:hover {
+  background-color: #ededed !important;
+}

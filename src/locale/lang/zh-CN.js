@@ -171,6 +171,9 @@ export default {
       light: '浅色',
       dark: '深色',
     },
+    zoom: {
+      text: '界面缩放',
+    },
     themeColor: {
       text: '主题颜色',
       default: '原始颜色',

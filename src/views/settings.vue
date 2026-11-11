@@ -40,7 +40,9 @@
           </select>
         </div>
       </div>
-      <div class="item">
+      <!-- 【墨水屏】外观选项已失效：调色板被钉成纯白底黑字，选中"深色"也不会变。
+           留着只会让人以为坏了，直接隐藏。 -->
+      <div v-if="!EINK" class="item">
         <div class="left">
           <div class="title"> {{ $t('settings.appearance.text') }} </div>
         </div>
@@ -56,7 +58,8 @@
           </select>
         </div>
       </div>
-      <div class="item">
+      <!-- 【墨水屏】同上：强调色固定纯黑，6 套主题色在 16 级灰阶上无法区分。 -->
+      <div v-if="!EINK" class="item">
         <div class="left">
           <div class="title"> {{ $t('settings.themeColor.text') }} </div>
         </div>
@@ -73,6 +76,20 @@
             </option>
             <option value="forest">
               {{ $t('settings.themeColor.forest') }}
+            </option>
+          </select>
+        </div>
+      </div>
+      <div v-if="isElectron" class="item">
+        <div class="left">
+          <div class="title"> {{ $t('settings.zoom.text') }} </div>
+        </div>
+        <div class="right">
+          <!-- 【墨水屏】默认 90%：13 寸以下一屏能多放两三条，
+               同时保证 12px 的次级文字仍可读。 -->
+          <select v-model="zoomFactor">
+            <option v-for="option in zoomOptions" :key="option" :value="option">
+              {{ Math.round(option * 100) }}%
             </option>
           </select>
         </div>
@@ -816,6 +833,7 @@ import {
   changeThemeColor,
   bytesToSize,
 } from '@/utils/common';
+import { EINK, EINK_ZOOM_FACTOR, EINK_ZOOM_OPTIONS } from '@/utils/eink';
 import { countDBSize, clearDB } from '@/utils/db';
 import pkg from '../../package.json';
 
@@ -830,6 +848,9 @@ export default {
   name: 'Settings',
   data() {
     return {
+      // 【墨水屏】开关与缩放档位供模板使用
+      EINK,
+      zoomOptions: EINK_ZOOM_OPTIONS,
       tracksCache: {
         size: '0KB',
         length: 0,
@@ -929,6 +950,31 @@ export default {
           key: 'musicLanguage',
           value,
         });
+      },
+    },
+    // 【墨水屏】界面缩放。
+    //
+    // 用 webFrame 而不是 CSS zoom：webFrame 是 Chromium 原生缩放，字体、间距、
+    // 图标一起缩，且不会让 position:fixed 的顶栏/底栏重新定位（CSS zoom 会）。
+    // 值写进 settings，由 localStorage 插件持久化，下次启动在 main.js 里恢复。
+    zoomFactor: {
+      get() {
+        if (this.settings.zoomFactor === undefined) return EINK_ZOOM_FACTOR;
+        return this.settings.zoomFactor;
+      },
+      set(value) {
+        const factor = Number(value);
+        this.$store.commit('updateSettings', {
+          key: 'zoomFactor',
+          value: factor,
+        });
+        if (this.isElectron) {
+          try {
+            window.require('electron').webFrame.setZoomFactor(factor);
+          } catch (e) {
+            console.warn('[eink] 应用界面缩放失败', e);
+          }
+        }
       },
     },
     appearance: {

@@ -1,4 +1,11 @@
 'use strict';
+
+/**
+ * 【墨水屏】构建标记。
+ *
+ * 与 src/utils/eink.js 的 EINK 保持一致（主进程无法走 @ 别名，故单独声明）。
+ */
+const EINK_BUILD = true;
 import {
   app,
   protocol,
@@ -6,7 +13,6 @@ import {
   shell,
   dialog,
   globalShortcut,
-  nativeTheme,
   screen,
 } from 'electron';
 import {
@@ -173,7 +179,6 @@ class Background {
   createWindow() {
     log('creating app window');
 
-    const appearance = this.store.get('settings.appearance');
     const showLibraryDefault = this.store.get('settings.showLibraryDefault');
 
     const options = {
@@ -193,13 +198,17 @@ class Background {
         nodeIntegration: true,
         enableRemoteModule: true,
         contextIsolation: false,
+        // 【墨水屏】默认界面缩放 90%。
+        //
+        // 在 webPreferences 里给初值，是为了让窗口创建时就按该比例排版——若只在
+        // 渲染进程里调 webFrame.setZoomFactor，会先以 100% 画一帧再跳变。
+        // 之后的用户改动存在 settings.zoomFactor（见 src/views/settings.vue）。
+        zoomFactor: 0.9,
       },
-      backgroundColor:
-        ((appearance === undefined || appearance === 'auto') &&
-          nativeTheme.shouldUseDarkColors) ||
-        appearance === 'dark'
-          ? '#222'
-          : '#fff',
+      // 【墨水屏】首帧窗口底色固定纯白。
+      // 上游跟随系统深浅色给 #222 / #fff，系统处于深色时启动会先黑闪一下，
+      // 而界面本身已被钉成浅色，这一帧在墨水屏上就是一次整屏刷新。
+      backgroundColor: '#fff',
     };
 
     if (this.store.get('window.x') && this.store.get('window.y')) {
@@ -266,6 +275,15 @@ class Background {
 
   checkForUpdates() {
     if (isDevelopment) return;
+    // 【墨水屏】关掉更新检查。
+    //
+    // 上游的检查逻辑是"发现新版 → 弹窗引导去 GitHub 下载官方安装包"。本定制版
+    // 的适配层不在上游里，装回官方版等于把墨水屏适配整个覆盖掉；而且版本号已
+    // 与上游脱钩（0.4.11-eink），继续比较只会天天弹同一个提示。
+    if (EINK_BUILD) {
+      log('eink build, skip update check');
+      return;
+    }
     log('checkForUpdates');
     autoUpdater.checkForUpdatesAndNotify();
 

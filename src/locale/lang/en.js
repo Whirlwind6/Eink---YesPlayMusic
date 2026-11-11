@@ -170,6 +170,9 @@ export default {
       light: 'Light',
       dark: 'Dark',
     },
+    zoom: {
+      text: 'Interface zoom',
+    },
     themeColor: {
       text: 'Theme Color',
       default: 'Original',

@@ -165,6 +165,9 @@ export default {
       light: 'Aydınlık',
       dark: 'Karanlık',
     },
+    zoom: {
+      text: 'Arayüz yakınlaştırma',
+    },
     themeColor: {
       text: 'Tema rengi',
       default: 'Orijinal',

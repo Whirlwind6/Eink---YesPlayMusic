@@ -167,6 +167,9 @@ export default {
       light: '淺色',
       dark: '深色',
     },
+    zoom: {
+      text: '介面縮放',
+    },
     themeColor: {
       text: '主題顏色',
       default: '原始顏色',
