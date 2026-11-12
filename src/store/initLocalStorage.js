@@ -16,9 +16,7 @@ let localStorage = {
     musicQuality: 320000,
     lyricFontSize: 28,
     outputDevice: 'default',
-    // 【墨水屏】默认关闭首页的 "by Apple Music" 歌单区块：
-    // 那栏是纯编辑推荐，字多图多，首屏被它占掉一半。设置页里仍可手动打开。
-    showPlaylistsByAppleMusic: false,
+    showPlaylistsByAppleMusic: true,
     enableUnblockNeteaseMusic: true,
     automaticallyCacheSongs: true,
     cacheLimit: 8192,

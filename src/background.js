@@ -110,6 +110,15 @@ class Background {
     // Make sure the app is singleton.
     if (!app.requestSingleInstanceLock()) return app.quit();
 
+    // 【墨水屏】关掉 GPU 硬件加速。
+    //
+    // 好处有两块：一是少一个 GPU 进程，任务管理器里通常能省 80–150MB 常驻内存，
+    // 进程数也从 5 个降到 4 个；二是墨水屏本来就没有 60fps 动画，纯色块界面
+    // 用软件光栅化完全够用，不会觉得慢。
+    // 界面里的模糊/半透明已经在 eink.scss 里全部关掉了，不依赖 GPU 合成。
+    // 副作用：MV 视频改走软解，CPU 会高一些；这个设备上基本不看 MV。
+    app.disableHardwareAcceleration();
+
     // start netease music api
     this.neteaseMusicAPI = startNeteaseMusicApi();
 
@@ -198,6 +207,10 @@ class Background {
         nodeIntegration: true,
         enableRemoteModule: true,
         contextIsolation: false,
+        // 【墨水屏】关掉拼写检查。Electron 会为它常驻加载 hunspell 词典，
+        // 约 30–60MB；这个应用只有搜索框和登录框，用不上。输入框里的
+        // 红色波浪线本来也会在墨水上变成一圈灰点。
+        spellcheck: false,
         // 【墨水屏】默认界面缩放 90%。
         //
         // 在 webPreferences 里给初值，是为了让窗口创建时就按该比例排版——若只在

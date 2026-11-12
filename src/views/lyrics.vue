@@ -312,6 +312,7 @@ import { lyricParser, copyLyric, parseLyric } from '@/utils/lyrics';
 import ButtonIcon from '@/components/ButtonIcon.vue';
 import * as Vibrant from 'node-vibrant/dist/vibrant.worker.min.js';
 import Color from 'color';
+import { EINK } from '@/utils/eink';
 import { isAccountLoggedIn } from '@/utils/auth';
 import { hasListSource, getListSourcePath } from '@/utils/playList';
 import locale from '@/locale';
@@ -710,6 +711,9 @@ export default {
       this.player.switchShuffle();
     },
     getCoverColor() {
+      // 【墨水屏】歌词页的封面取色渐变已被 eink.scss 关掉，这里没必要再为了
+      // 一个用不到的渐变色去起 Worker、解一张封面。
+      if (EINK) return;
       if (this.settings.lyricsBackground !== true) return;
       const cover = this.currentTrack.al?.picUrl + '?param=256y256';
       Vibrant.from(cover, { colorCount: 1 })

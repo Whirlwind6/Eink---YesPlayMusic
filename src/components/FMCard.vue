@@ -40,6 +40,7 @@ import ArtistsInLine from '@/components/ArtistsInLine.vue';
 import { mapState } from 'vuex';
 import * as Vibrant from 'node-vibrant/dist/vibrant.worker.min.js';
 import Color from 'color';
+import { EINK } from '@/utils/eink';
 
 export default {
   name: 'FMCard',
@@ -91,6 +92,9 @@ export default {
       this.player.moveToFMTrash();
     },
     getColor() {
+      // 【墨水屏】卡片底色已被 eink.scss 钉成纯白，取色结果根本用不到。
+      // 跳过可以省掉一次 Web Worker 启动 + 一张 512×512 封面的解码。
+      if (EINK) return;
       if (!this.player.personalFMTrack?.album?.picUrl) return;
       const cover = `${this.player.personalFMTrack.album.picUrl.replace(
         'http://',

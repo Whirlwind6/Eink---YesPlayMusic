@@ -1,243 +1,172 @@
 # YesPlayMusic 墨水屏（E-Ink）适配说明
 
-基于 YesPlayMusic **v0.4.11**（Vue 2 + Electron 13），当前版本号 `0.4.11-eink.2`。
+版本 `0.4.11-eink.3`｜源码目录 `ypm-eink/`｜产物 `YesPlayMusic-EInk-0.4.11-eink.3-win-x64.zip`
 
----
+本轮只解决四件事，其余部分与上一版一致：
 
-## 一、这一版（第二轮）改了什么
-
-| 你提的问题 | 原因 | 处理 |
+| 反馈 | 处理 | 涉及文件 |
 |---|---|---|
-| 主界面没有登录和设置入口 | `eink.scss` 里 `.avatar { display: none }`，而头像是上游**唯一**的用户菜单入口，隐藏后连带把登录/设置一起藏了 | 顶栏右侧补一排文字按钮：`登录`（已登录时变 `登出`）+ `设置` |
-| 编译后必须安装 | 你跑的是上游 `Release` 工作流，它只归档 `*Setup*.exe`，那是 NSIS 安装包（`oneClick + perMachine`，默认装进 Program Files） | `win.target` 只留 `portable` + `zip`，删掉 `nsis`；CI 只出便携版 |
-| 构建告警一堆 | 下游 action 仍跑 Node 20；第三方打包 action 用了废弃的 `::set-output`；3 处 `v-html`、4 处 prop 缺默认值 | 逐条处理，见第五节；现在 `eslint` 零告警 |
-| Apple Music 歌单默认展示 | 上游默认 `showPlaylistsByAppleMusic: true` | 默认改 `false`，并做一次性迁移覆盖老存档 |
+| 只留 zip 产物 | `win.target` 只保留 `zip`，CI 只归档 zip | `vue.config.js`、`.github/workflows/build.yaml` |
+| 扫码登录显示不出二维码 | 二维码改 PNG 纯黑白、固定尺寸、失败可重试；补上 `os=pc` 设备标识 | `views/loginAccount.vue`、`api/auth.js` |
+| 去掉「默认关闭 Apple Music 歌单」 | 默认值、首页条件、设置页 getter 全部回滚，并清掉上一版写进存档的 `false` | `store/*`、`views/home.vue`、`views/settings.vue` |
+| 内存占用偏大 | 关 GPU 加速、关拼写检查、跳过封面取色（三处低风险改动） | `background.js`、`FMCard.vue`、`lyrics.vue` |
 
 ---
 
-## 二、先说结论：封面可以直接去掉，不会留空
+## 一、二维码为什么显示不出来
 
-你担心"去掉封面后两个歌单间距变大"，这个担心成立，但原因不是封面本身。
+先做了路径排查：把 NCM API 单进程起在 10754、按应用的方式套一层 `express-http-proxy`，用应用里一模一样的请求打 `/api/login/qr/key`，返回是正常的：
 
-YesPlayMusic 的封面全部是 `<img>` **用宽高比撑出来的**：
-
-```scss
-/* Cover.vue */
-img { width: 100%; aspect-ratio: 1 / 1; }
+```json
+{"data":{"code":200,"unikey":"a8b9ed95-…"},"code":200}
 ```
 
-外层 `.cover` / `.cover-container` 都没有写死高度。所以 `display: none` 之后容器会**自然塌陷为 0**，不会留下一个空白方块——这正是"只留文字"能成立的原因。
+把渲染层单独构建出来在 Chromium 里跑，二维码**能**画出来，但你那版画出来是这个样子：`#335eea` 的蓝色码点，压在 `#ededed` 的浅灰卡片上，`192px`、SVG 里是 **1px 描边**画出来的格子。灰度墨水屏上蓝色只剩三成黑，再叠一层抗锯齿，就是一片看不清的灰。所以问题不是「没生成」，而是「生成了，但在你的屏幕上看不见」。
 
-真正让间距显大的是两处固定值，已经一并收紧：
+另外查到一个更要命的问题：网易云在 2025 年中改过扫码接口，请求里不带设备标识时，轮询接口 `/login/qr/check` 直接返回 `404 Not Found`——**手机扫了也不会有任何反应**。带上 `os=pc` 就正常返回 `801 等待扫码`：
 
-| 位置 | 上游 | 现在 |
-|---|---|---|
-| `CoverRow` 的 `gap` | `44px 24px`（给"封面 + 两行文字"留的呼吸） | `12px 20px` |
-| 首页每个区块 `.index-row` | `margin-top: 54px` | `26px` |
+```
+GET /login/qr/check?key=…&cookie=os%3Dpc                       → {"code":404,"msg":"Not Found"}
+GET /login/qr/check?key=…&cookie=os%3Dpc%3B%20appver%3D8.9.70  → {"code":801,"message":"等待扫码"}
+```
 
-> **没有选择"把封面占位调小"**：那需要把每个网格项从"上封面下文字"改成"左小图右文字"，等于重排 `CoverRow` 及其 10 个调用页面的布局，风险远高于收益。而"完全去掉 + 收紧间距"只动 CSS，一行结构都没改。
+也就是说，上一版即使二维码看得见，扫码也是白扫。两处都改了。
 
----
+### 改法
 
-## 三、需求落地方式
-
-### 1. 去深色
-
-YesPlayMusic 的主题是 CSS 变量驱动（`:root` 浅色 / `[data-theme='dark']` 深色）。做法是三层：
-
-- **JS 层**：`changeAppearance()` 里强制 `appearance = 'light'`，任何路径（系统深色、设置页选深色）都落回浅色；
-- **变量层**：`eink.scss` 里把 `--color-body-bg` 等一组变量钉成纯白/纯黑，并额外覆盖 `body[data-theme='dark']` 与 `.lyrics-page[data-theme='dark']`（歌词页自己设了主题属性）；
-- **设置页**：把已失效的"外观"和"主题颜色"两个下拉隐藏，避免用户以为坏了。
-
-强调色从 `#335eea` 蓝改成 **纯黑**：6 套主题色在 16 级灰阶上都会被压成同一片中灰，白字压中灰对比度不足。
-
-### 2. 去封面
-
-| 位置 | 处理 |
-|---|---|
-| `Cover.vue`（首页/探索/歌手/专辑/搜索的封面网格，10 个页面共用） | `.cover { display: none }` 一处生效 |
-| 曲目列表左侧缩略图（`TrackListItem`） | `.track > img` 隐藏，行高缩到文字高度 |
-| 底部播放条 46px 封面 | 隐藏，歌名左移（连带清掉 `margin-left: 12px`） |
-| 全屏播放页大封面（`lyrics.vue`） | 隐藏，同时关掉三种封面背景：模糊、旋转、取色渐变 |
-| 专辑/歌手详情页头图 | 隐藏，清掉为它预留的 `margin-left: 56px` |
-| 每日推荐 / 私人 FM 卡片 | 封面隐藏后卡片会变纯白「消失」，补 1px 描边 |
-
-**没有做图片请求拦截**（区别于安卓版）：Electron 里封面是 `<img>`，`display:none` 后浏览器不会解码，但**仍会发请求**。彻底拦截要改 `utils/filters` 的 `resizeImage`，会波及登录二维码等本地图，本版没做。
-
-### 3. 默认缩放 90%
+`api/auth.js`——key 和 check 用同一串设备 cookie，否则会话对不上：
 
 ```js
-// background.js：窗口创建时就按 90% 排版，避免先画一帧 100% 再跳
-webPreferences: { zoomFactor: 0.9 }
-
-// main.js：Vue 挂载前再应用一次用户自定义值（存在 settings.zoomFactor）
-webFrame.setZoomFactor(resolveZoomFactor())
+const QR_DEVICE_COOKIE = 'os=pc; appver=8.9.70';
 ```
 
-用 `webFrame` 而不是 CSS `zoom`：前者是 Chromium 原生缩放，字体/间距/图标一起缩，且不会让 `position: fixed` 的顶栏底栏重新定位。
+`views/loginAccount.vue`——`QRCode.toString`（SVG）换成 `QRCode.toDataURL`（PNG）：
 
-### 4. 缩放按钮
+| | 上一版 | 现在 |
+|---|---|---|
+| 格式 | SVG data URI，1px 描边 | PNG，440px 位图 |
+| 颜色 | `#335eea` 蓝 / 透明底 | `#000000` 纯黑 / `#ffffff` 纯白 |
+| 白边 | `margin: 0`（没有静区） | `margin: 4`（4 个模块的静区，扫码器需要） |
+| 显示尺寸 | 192px，`loading="lazy"` | 220px，固定宽高，随页面缩放 |
+| 失败时 | 空白灰框，控制台一行错误 | 灰框里给「获取失败，点击重试」按钮 + 文字提示 |
 
-做成 **设置页 → 界面缩放** 下拉，5 档：80% / 90% / 100% / 110% / 125%，值写进 `settings.zoomFactor` 持久化。
+顺手补了两处：取码失败后切到手机登录再切回来会重新取码（原来只重启轮询，永远好不了）；`checkQrCodeLogin` 只在拿到 key 之后才启动。
 
-没做顶栏 ± 按钮：会挤占导航区，且与窗口拖动区（`-webkit-app-region: drag`）冲突。
+> 实测截图见 `登录页-二维码效果.png`。这是构建产物在 Chromium 里的实际渲染，不是设计稿。
 
-### 5. 登录 / 设置入口（本轮新增）
-
-问题出在"头像被隐藏"这一步：上游把设置、登录、登出、GitHub 全塞在头像弹出的 `ContextMenu` 里，头像一 `display:none`，这个菜单就再也点不到了。
-
-`Navbar.vue` 右侧新增一组文字按钮（只在 `EINK` 为真时渲染，非墨水屏构建完全不受影响）：
-
-```
-[搜索框]  昵称  登出  设置
-```
-
-- 未登录：`登录`（Electron 下进邮箱/手机号登录页，Web 下进账号页）；
-- 已登录：显示昵称 + `登出`（点完会二次确认）；
-- `设置` 常驻，直接进设置页；
-- 按钮是 1px 黑描边 + 透明底，hover 只换成浅灰底，不加过渡动画（墨水屏上的动画会糊成灰影）。
-
-### 6. 首页默认不显示 "by Apple Music"（本轮新增）
-
-四处联动，缺一处都会漏：
-
-| 位置 | 改动 |
-|---|---|
-| `store/initLocalStorage.js` | 默认值 `true` → `false` |
-| `views/home.vue` | `v-if="settings.showPlaylistsByAppleMusic !== false"` → `=== true` |
-| `views/settings.vue` | 开关的 getter 缺省值 `true` → `false` |
-| `store/index.js` | **一次性迁移**：老版本已把 `true` 写进 localStorage，只改默认值对升级用户无效，所以首次启动强制置 `false` 并写 `einkDefaultsApplied` 标记，之后用户在设置里手动打开不会被反复覆盖 |
-
-设置页里那个开关仍保留，想开随时能开。
-
----
-
-## 四、便携版是怎么来的（本轮）
-
-### 根因不在代码，在工作流
-
-上游 `.github/workflows/build.yaml` 里产物只归档一种文件：
-
-```yaml
-- uses: actions/upload-artifact@v4
-  with:
-    name: YesPlayMusic-win
-    path: dist_electron/*Setup*.exe      # ← 只有安装包
-```
-
-你截图里的任务名 `release (windows-latest)` 就是这个工作流。`vue.config.js` 里其实一直有 `portable` 目标，只是 CI 没把它传上来，所以你只能拿到 `Setup.exe`（`nsis` 配置是 `oneClick: true, perMachine: true`，双击即静默装进 Program Files，观感就是"必须安装"）。
-
-### 现在
+## 二、只出 zip
 
 `vue.config.js`：
 
 ```js
 win: {
-  target: [
-    { target: 'portable', arch: ['x64'] },   // 单文件 exe，双击即用
-    { target: 'zip',      arch: ['x64'] },   // 解压即用目录版，启动更快
-  ],
+  target: [{ target: 'zip', arch: ['x64'] }],
   artifactName: 'YesPlayMusic-EInk-${version}-win-${arch}.${ext}',
 }
 ```
 
-- `nsis` 从 `win.target` 里删掉（配置块留着，加回去就能恢复安装包）；
-- 产物名带 `EInk` 和 `win-x64`，不会再和 `Setup` 混在一起。
+`portable` 和 `nsis` 都从 target 里拿掉了（`nsis` 配置块留着，要恢复安装包把它加回 target 即可）。
 
-两个产物的差别：
+CI 的归档步骤同步收窄：
 
-| 文件 | 行为 |
+```yaml
+- name: 归档
+  uses: actions/upload-artifact@v6
+  with:
+    name: YesPlayMusic-EInk-win-zip
+    path: dist_electron/*-win-x64.zip
+```
+
+产物 `YesPlayMusic-EInk-0.4.11-eink.3-win-x64.zip` 解压后直接双击里面的 `YesPlayMusic.exe`，不写注册表、不建快捷方式，也不往 `%TEMP%` 解压自身，所以启动比单文件版快。
+
+## 三、Apple Music 歌单恢复默认显示
+
+上一版加的「默认关闭」整个去掉了，四处全部回滚到上游：
+
+| 位置 | 现在 |
 |---|---|
-| `YesPlayMusic-EInk-0.4.11-eink.2-win-x64.exe` | 单个 exe，双击直接跑。首次启动会自解压到 `%TEMP%`，之后复用缓存；不写注册表、不建快捷方式、不需要管理员 |
-| `YesPlayMusic-EInk-0.4.11-eink.2-win-x64.zip` | 解压到任意目录，双击里面 `YesPlayMusic.exe`。**启动最快**，适合放固定位置 |
+| `store/initLocalStorage.js` | `showPlaylistsByAppleMusic: true` |
+| `views/home.vue` | `v-if="settings.showPlaylistsByAppleMusic !== false"` |
+| `views/settings.vue` | getter 缺省值 `true` |
+| `store/index.js` | 删掉强制关闭的迁移 |
 
-> 设置与歌曲缓存仍在 `%APPDATA%\YesPlayMusic`，不在程序目录——这样换版本不用重新登录。这个应用本身就会往本地缓存歌曲，做成"数据跟着 exe 走"意义不大。
+设置页里那个开关保留，你想关随时关。
 
-### CI 工作流一并重写
+**额外处理了一个坑**：上一版会把 `false` 写进 localStorage 并且打上 `einkDefaultsApplied` 标记。只改默认值的话，你机器上那份存档仍然是 `false`，首页还是不出来。所以留了六行一次性清理：看到那个标记且值是 `false`，就把这条设置删掉、让默认值生效，然后销毁标记。只认这个标记，不会动更早版本里你自己关掉的值。
 
-只保留一个 `.github/workflows/build.yaml`：
+## 四、内存占用
 
-- 矩阵从 mac/win/linux 三平台收成 `windows-latest` 单平台（mac/Linux 包你用不上，还拖慢 20 分钟）；
-- 去掉 `samuelmeuli/action-electron-builder@v1.6.0`，直接 `yarn electron:build-win`（`-p never`，不发布）；
-- 删掉 `build-win-eink.yml`（上一轮那个），避免 tag 触发时两个工作流同时跑；
-- 删掉 `sync.yml`：它会每小时把上游 `master` 同步过来，一旦你的仓库被识别成 fork 就会**覆盖掉全部墨水屏改动**，对定制版是纯风险。
+先说结论：**能省一点，但省不到「小一半」那种程度**。这个应用的大头不在界面。
 
----
+### 做了三件事（都是低风险）
 
-## 五、那 8 条告警逐条销账
+1. **关掉 GPU 硬件加速**（`background.js` 里 `app.disableHardwareAcceleration()`）。Windows 上直接少一个 GPU 进程，任务管理器从 5 个进程变 4 个，通常能省 80–150MB。墨水屏界面全是纯色块、没有动画，软件光栅化完全够用；模糊和半透明在前几轮已经全部去掉了，不依赖 GPU 合成。
+   *副作用：MV 走软解，CPU 会高一些。这个设备上基本不看 MV。*
+2. **关掉拼写检查**（`webPreferences.spellcheck: false`）。Electron 会为它常驻加载 hunspell 词典，约 30–60MB。这个应用只有搜索框和登录框，用不上。
+3. **跳过封面取色**（`FMCard.vue`、`lyrics.vue` 里给 `getColor` / `getCoverColor` 加了 `if (EINK) return`）。`node-vibrant` 每次换歌都会起一个 Web Worker、解一张 512×512 的封面来算渐变色——而这两个地方的渐变早就被 `eink.scss` 关成纯白了，纯属白算。
 
-| 告警 | 处理 |
-|---|---|
-| `Node.js 20 is deprecated`（checkout@v3 / setup-node@v3 / upload-artifact@v4 / action-electron-builder@v1.6.0） | 升到跑 Node 24 的主版本：`checkout@v5`、`setup-node@v5`、`upload-artifact@v6`；第三方打包 action 整个删掉。注意 `upload-artifact@v5` 仍声明 node20，必须 v6 |
-| `set-output command is deprecated` | 该命令来自 `action-electron-builder` 和自写的 `get_unm_version` 步骤，两者都已删除，不再有 `::set-output` |
-| `loginAccount.vue#L108 v-html` | 文案是 locale 里的静态字符串（含 `<br />` 和源码仓库链接），不含用户输入；用 `eslint-disable vue/no-v-html` 包住这一段并注明原因 |
-| `CoverRow.vue#L33 v-html` | 副标题里的歌手名原本拼成 `<a href>` 字符串。改成 `artistInfo()` + `<router-link>`，顺带修掉"点歌手整页刷新" |
-| `MvRow.vue#L23 v-html` | 同上，改成 `getArtist()` + `<router-link>` |
-| `TrackListItem.vue#L100/101 prop 默认值` | `trackProp: { type: Object, default: () => ({}) }`、`trackNo: { type: Number, default: 0 }` |
-| `MvRow.vue#L33 mvs 默认值` | `mvs: { type: Array, default: () => [] }` |
-| `Modal.vue#L25 close 默认值` | `close: { type: Function, default: () => {} }` |
+合计估计 **130–200MB**，占总量两成上下。这个数是按 Electron 进程结构估的，不是在你机器上实测的——我这边没有 Windows 环境跑它。
 
-顺手还清了 6 个 `no-unused-vars` **error**（`background.js` 的 `second-instance` 回调参数、`ipcMain.js` 的 `removeProxy` 回调参数、`services.js` 里只为副作用而引入的 `checkAuthToken`）。这几处不影响 Electron 打包（主进程不走 lint），但会让 `yarn lint` 直接失败，一并处理了。
+### 没做的事，以及为什么
 
-> 复查结果：`eslint --ext .js,.vue src` → **0 error 0 warning**；`prettier --check` 全过；6 个改动过的 `.vue` 模板用 `vue-template-compiler` 编译无错。
-
----
-
-## 六、改动清单
-
-| 文件 | 类型 | 说明 |
+| 想法 | 能省 | 为什么不建议 |
 |---|---|---|
-| `src/utils/eink.js` | 新增 | `EINK` 开关、默认缩放、档位、`resolveZoomFactor()` |
-| `src/assets/css/eink.scss` | 新增 | **适配主体**，规则全部挂在 `html.eink` 下 |
-| `src/main.js` | 改 | 引入 eink.scss、加 `html.eink` class、启动时应用缩放 |
-| `src/utils/common.js` | 改 | 强制浅色、强制纯黑强调色 |
-| `src/components/Navbar.vue` | 改（本轮） | 补登录/登出/设置文字入口 + 昵称显示 |
-| `src/store/initLocalStorage.js` | 改（本轮） | Apple Music 歌单默认 `false` |
-| `src/store/index.js` | 改（本轮） | 老存档的一次性迁移（`einkDefaultsApplied` 标记） |
-| `src/views/home.vue` | 改（本轮） | 区块条件改为严格 `=== true` |
-| `src/views/settings.vue` | 改 | 隐藏外观/主题色；新增界面缩放；Apple Music 开关缺省值改 `false` |
-| `src/views/loginAccount.vue` | 改（本轮） | `v-html` 加范围豁免注释 |
-| `src/components/CoverRow.vue` | 改（本轮） | 歌手副标题改 `router-link` |
-| `src/components/MvRow.vue` | 改（本轮） | 歌手副标题改 `router-link`；`mvs` 默认值 |
-| `src/components/TrackListItem.vue` | 改（本轮） | `trackProp` / `trackNo` 默认值 |
-| `src/components/Modal.vue` | 改（本轮） | `close` 默认值 |
-| `src/background.js` | 改 | `zoomFactor: 0.9`、白底、关闭更新检查、未使用回调参数 |
-| `src/electron/ipcMain.js`、`src/electron/services.js` | 改（本轮） | 清 `no-unused-vars` |
-| `src/locale/lang/*.js` | 改 | 四语言补 `settings.zoom.text` |
-| `vue.config.js` | 改（本轮） | win 只出 `portable` + `zip`，产物改名 |
-| `.github/workflows/build.yaml` | 重写（本轮） | Windows 单平台便携版，替换废弃 action 与 `set-output` |
-| `.github/workflows/build-win-eink.yml`、`sync.yml` | 删除（本轮） | 前者与 build.yaml 重复；后者会用上游覆盖定制改动 |
-| `package.json` | 改 | 版本号 `0.4.11-eink.2` |
+| 干掉内置的 NCM API 服务 | 200–300MB | 它跑在主进程里，承载所有在线功能。删掉等于只能听本地文件 |
+| 去掉 `@unblockneteasemusic/rust-napi` 原生模块 | 50–100MB | 灰歌替换全靠它，去掉后大量歌不能播 |
+| 路由改懒加载、组件按需引入 | 20–40MB | 要动几十个文件，收益不成比例，回归风险高 |
+| 限制 V8 堆大小 | 0（只是提前 OOM） | 只会让它在大列表页崩掉 |
 
-### 为什么关闭自动更新
-
-上游的更新检查是「发现新版 → 弹窗引导去 GitHub 下载**官方安装包**」。本定制版的适配层不在上游里，装回官方版等于把适配整个覆盖掉；版本号也已与上游脱钩，继续比较只会天天弹同一个提示。所以 `checkForUpdates()` 里直接 return。
+如果你觉得 130–200MB 这个量级不值得承担「万一把 GPU 关掉有渲染问题」的风险，把 `background.js` 里那行 `app.disableHardwareAcceleration()` 删掉就回到原状，其余两处可以留着——它们没有可见副作用。
 
 ---
+
+## 五、前面几轮已经做过的（保持不动）
+
+- **去封面**：`.cover` 等 8 类元素 `display:none`，容器没有固定高度会自然塌陷，不留空位；网格间距从 `44px` 收到 `12px`。
+- **去深色**：`appearance` 锁 `light`，`data-theme="dark"` 的局部变量统一覆盖；弹层改成白底黑边、去掉毛玻璃。
+- **默认缩放 90%**：`webPreferences.zoomFactor` 给初值，避免先画 100% 再跳变。
+- **设置页缩放控件**：80/90/100/110/125 五档，存 `settings.zoomFactor`。
+- **登录 / 设置入口**：`.avatar` 被隐藏后原版菜单没有入口，顶栏右侧补了文字按钮（未登录「登录」、已登录「昵称 / 登出」，右侧固定「设置」）。
+- **关掉自动更新**：`EINK_BUILD` 时跳过 `checkForUpdates()`。
+
+## 六、改动清单（相对上一版）
+
+```
+.github/workflows/build.yaml  |  17 +++----   只归档 zip
+package.json                  |   2 +-        0.4.11-eink.3
+src/api/auth.js               |  12 +++++     os=pc 设备标识
+src/background.js             |  13 +++++     关 GPU 加速、关拼写检查
+src/components/FMCard.vue     |   4 ++        跳过封面取色
+src/store/index.js            |  16 +++----   删强制关闭，加一次性清理
+src/store/initLocalStorage.js |   4 +-        默认值回 true
+src/views/home.vue            |   2 +-        条件回滚
+src/views/loginAccount.vue    | 104 ++++++++++++++++++++++-----   二维码
+src/views/lyrics.vue          |   4 ++        跳过封面取色
+src/views/settings.vue        |   3 +-        getter 缺省值回 true
+vue.config.js                 |  13 ++----    win.target 只留 zip
+```
+
+补丁：`ypm-eink-round3.patch`（相对上一版的增量，12 文件 141 行）、`ypm-eink.patch`（相对上游 master 的全量）。
 
 ## 七、构建
 
-推代码到任意分支就会自动构建（也可以 **Actions → Build Windows Portable (E-Ink) → Run workflow** 手动触发），跑完在 Artifacts 里下 `YesPlayMusic-EInk-win-portable`，里面就是上面那两个文件。
+推到自己的仓库，**Actions → Build Windows Zip (E-Ink) → Run workflow**（push 任意分支也会自动跑），跑完在 Artifacts 里下 `YesPlayMusic-EInk-win-zip`。
 
-> 如果你的仓库里还留着上一轮推上去的 `.github/workflows/build-win-eink.yml`，记得删掉——本次源码里已经移除，但旧文件若还在，两个工作流会同时跑。
+- 只跑 `windows-latest`，不需要 mac / ubuntu
+- 用的是 `yarn electron:build-win`，不依赖那个已经停更的第三方打包 action
+- 需要 `.env` 里的 `VUE_APP_ELECTRON_API_URL=/api` 等几个变量，工作流里已经用 `env:` 直接给了，不用再 `cp .env.example .env`
 
 本地（Windows / Node 16）也可以：
 
 ```bash
 yarn install
 yarn electron:build-win
-# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.2-win-x64.exe
-#       dist_electron/YesPlayMusic-EInk-0.4.11-eink.2-win-x64.zip
+# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.3-win-x64.zip
 ```
-
-> CI 用 Node 16（`engines` 要求 `14 || 16`）。Node 18+ 本地构建要 `yarn --ignore-engines`，并给 `vue-cli-service` 加 `NODE_OPTIONS=--openssl-legacy-provider`（webpack 4 的 md4 哈希在新 Node 上被移除）。
-
----
 
 ## 八、已知限制
 
-1. **封面仍会发网络请求**（只是不解码、不显示）。彻底拦截需要改 `resizeImage`，会波及登录二维码等本地图。
-2. **列表 hover 有 0.3s 过渡动画**，墨水屏上会有残影；全局关动效会影响路由转场与播放器反馈，暂未处理。
-3. **缩放会同时缩放 1px 描边**（90% 下 0.9px，可能显示为更浅的灰线）。
-4. `portable` 版每次启动要从 `%TEMP%` 校验/解压，冷启动比 `zip` 版慢 1~2 秒；在意启动速度就用 zip 版。
-5. macOS / Linux 未做专门验证（本次 CI 也不再产出）。
+- 封面只是**不显示**，网络请求还在发（`node-vibrant` 那两处已经跳过，其余列表页仍会下载封面图）。要彻底不发请求得动图片加载层，收益是流量不是内存。
+- 列表项的 hover 过渡（0.3s）没有关，墨水屏上是一道灰影，不影响使用。
+- 二维码用手机扫的时候把前光调亮一点成功率更高；这是墨水屏的固有问题，不是二维码本身。
+- 网易云接口随时可能再变。如果哪天扫码又不行了，先用「手机 / 邮箱登录」顶一下；`os=pc` 这个标识如果失效，改 `src/api/auth.js` 里的 `QR_DEVICE_COOKIE` 一处即可。

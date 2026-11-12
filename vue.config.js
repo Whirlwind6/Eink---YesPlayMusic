@@ -116,22 +116,17 @@ module.exports = {
           darkModeSupport: true,
         },
         win: {
-          // 【墨水屏】只出绿色版：
-          //   portable → 单个 exe，双击直接运行，不写注册表、不建快捷方式；
-          //   zip      → 解压即用的目录版，启动比 portable 快（省掉每次解压到 %TEMP%）。
+          // 【墨水屏】只出 zip 绿色版：解压即用，启动比单文件 portable 快
+          // （portable 每次启动都要先把自身解压到 %TEMP%），也不写注册表。
           // 原版还带 nsis 安装包，oneClick + perMachine 会静默装进 Program Files，
-          // 这对墨水屏设备是多余的，去掉。要恢复安装包把 nsis 那条加回来即可。
+          // 对墨水屏设备是多余的，去掉。要恢复安装包把 nsis 那条加回来即可。
           target: [
-            {
-              target: 'portable',
-              arch: ['x64'],
-            },
             {
               target: 'zip',
               arch: ['x64'],
             },
           ],
-          // 产物名统一成 …-win-x64.exe（单文件便携版）/ …-win-x64.zip（解压即用目录版）
+          // 产物名 …-win-x64.zip
           artifactName: 'YesPlayMusic-EInk-${version}-win-${arch}.${ext}',
           publisherName: 'YesPlayMusic',
           icon: 'build/icons/icon.ico',

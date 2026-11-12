@@ -71,8 +71,25 @@
         </div>
 
         <div v-show="mode == 'qrCode'">
-          <div v-show="qrCodeSvg" class="qr-code-container">
-            <img :src="qrCodeSvg" loading="lazy" />
+          <div v-show="qrCodeImage" class="qr-code-container">
+            <!-- 用 PNG 而不是 SVG data URI：上游那版是 1px 描边的 SVG，
+                 缩放后容易被抗锯齿糊掉；墨水屏上更需要实心黑块 + 纯白底。
+                 尺寸固定 220，不随窗口变化，扫码成功率才稳。 -->
+            <img
+              class="qr-code-image"
+              :src="qrCodeImage"
+              width="220"
+              height="220"
+            />
+          </div>
+          <div v-show="!qrCodeImage" class="qr-code-container qr-code-empty">
+            <button
+              class="qr-code-retry"
+              :disabled="qrCodeLoading"
+              @click="getQrCodeKey"
+            >
+              {{ qrCodeLoading ? '正在获取二维码…' : '获取失败，点击重试' }}
+            </button>
           </div>
           <div class="qr-code-info">
             {{ qrCodeInformation }}
@@ -142,7 +159,8 @@ export default {
       smsCode: '',
       inputFocus: '',
       qrCodeKey: '',
-      qrCodeSvg: '',
+      qrCodeImage: '',
+      qrCodeLoading: true,
       qrCodeCheckInterval: null,
       qrCodeInformation: '打开网易云音乐APP扫码登录',
     };
@@ -237,35 +255,51 @@ export default {
       }
     },
     getQrCodeKey() {
-      return loginQrCodeKey().then(result => {
-        if (result.code === 200) {
+      this.qrCodeLoading = true;
+      this.qrCodeImage = '';
+      return loginQrCodeKey()
+        .then(result => {
+          if (result.code !== 200 || !result.data?.unikey) {
+            this.qrCodeInformation = '二维码获取失败，请检查网络后重试';
+            return;
+          }
           this.qrCodeKey = result.data.unikey;
-          QRCode.toString(
+          this.checkQrCodeLogin();
+          // 生成位图：宽度给到 440（显示 220 的两倍），高分屏下模块边缘才不糊。
+          // 黑白两色是为了墨水屏——上游的 #335eea 在灰度面板上只有三成黑，
+          // 扫描器读起来吃力，这里直接钉成纯黑纯白。
+          return QRCode.toDataURL(
             `https://music.163.com/login?codekey=${this.qrCodeKey}`,
             {
-              width: 192,
-              margin: 0,
+              width: 440,
+              margin: 4,
+              errorCorrectionLevel: 'M',
               color: {
-                dark: '#335eea',
-                light: '#00000000',
+                dark: '#000000ff',
+                light: '#ffffffff',
               },
-              type: 'svg',
             }
           )
-            .then(svg => {
-              this.qrCodeSvg = `data:image/svg+xml;utf8,${encodeURIComponent(
-                svg
-              )}`;
+            .then(url => {
+              this.qrCodeImage = url;
+              // 重试成功、或旧码过期换新码之后，把上次的提示语换回正常文案
+              this.qrCodeInformation = '打开网易云音乐APP扫码登录';
             })
             .catch(err => {
               console.error(err);
+              this.qrCodeInformation = '二维码生成失败，点击重试';
             })
             .finally(() => {
               NProgress.done();
             });
-        }
-        this.checkQrCodeLogin();
-      });
+        })
+        .catch(err => {
+          console.error(err);
+          this.qrCodeInformation = '二维码获取失败，请检查网络后重试';
+        })
+        .finally(() => {
+          this.qrCodeLoading = false;
+        });
     },
     checkQrCodeLogin() {
       // 清除二维码检测
@@ -293,7 +327,12 @@ export default {
     changeMode(mode) {
       this.mode = mode;
       if (mode === 'qrCode') {
-        this.checkQrCodeLogin();
+        // 之前没取到图（断网、接口抽风）时，切回来要重新取，不能只重启轮询
+        if (this.qrCodeImage) {
+          this.checkQrCodeLogin();
+        } else {
+          this.getQrCodeKey();
+        }
       } else {
         clearInterval(this.qrCodeCheckInterval);
       }
@@ -486,6 +525,35 @@ button.loading {
   padding: 24px 24px 21px 24px;
   border-radius: 1.25rem;
   margin-bottom: 12px;
+}
+/* 二维码本体：固定 220，白底，别让它被压缩或拉伸 */
+.qr-code-image {
+  display: block;
+  width: 220px;
+  height: 220px;
+  background-color: #ffffff;
+}
+/* 还没取到图时的占位：尺寸和上面一致，避免加载完成后页面跳一下 */
+.qr-code-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 220px;
+  height: 220px;
+}
+.qr-code-retry {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid var(--color-text);
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.qr-code-retry:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 .qr-code-info {
   color: var(--color-text);

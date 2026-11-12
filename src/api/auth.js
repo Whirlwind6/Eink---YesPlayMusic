@@ -39,6 +39,16 @@ export function loginWithEmail(params) {
 }
 
 /**
+ * 二维码登录用的设备标识。
+ *
+ * 网易云 2025 年中收紧了扫码接口：请求不带 os=pc 的 cookie 时，
+ * /login/qr/check 直接回 404（手机扫了也不会有反应），带上就正常返回
+ * 801/802/803。appver 只是让服务端把它当成 PC 客户端，不校验版本号。
+ * key 与 check 必须用同一串，否则会话对不上。
+ */
+const QR_DEVICE_COOKIE = 'os=pc; appver=8.9.70';
+
+/**
  * 二维码key生成接口
  */
 export function loginQrCodeKey() {
@@ -46,6 +56,7 @@ export function loginQrCodeKey() {
     url: '/login/qr/key',
     method: 'get',
     params: {
+      cookie: QR_DEVICE_COOKIE,
       timestamp: new Date().getTime(),
     },
   });
@@ -81,6 +92,7 @@ export function loginQrCodeCheck(key) {
     method: 'get',
     params: {
       key,
+      cookie: QR_DEVICE_COOKIE,
       timestamp: new Date().getTime(),
     },
   });

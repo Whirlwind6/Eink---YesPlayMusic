@@ -1,11 +1,10 @@
-name: Build Windows Portable (E-Ink)
+name: Build Windows Zip (E-Ink)
 
-# 只出 Windows 便携版，不出安装包：
-#   *.exe → 单文件便携版，双击即用，不写注册表、不建快捷方式
-#   *.zip → 解压即用的目录版，启动更快
+# 只出 Windows zip 绿色版，不出安装包也不出单文件 portable：
+#   *.zip → 解压即用，启动最快（portable 每次启动都要先解压自身到 %TEMP%）
 #
 # 触发：push（任意分支，含打 tag）、或在 Actions 页面手动 Run workflow。
-# 产物：Actions → 本次运行 → Artifacts → YesPlayMusic-EInk-win-portable
+# 产物：Actions → 本次运行 → Artifacts → YesPlayMusic-EInk-win-zip
 #
 # 相比上游 build.yaml 的改动：
 #   1. 去掉 mac / ubuntu 矩阵，只留 windows-latest；
@@ -49,7 +48,7 @@ jobs:
           yarn add --ignore-platform --ignore-optional \
             @unblockneteasemusic/rust-napi-win32-x64-msvc@${unm_version}
 
-      - name: 构建便携版
+      - name: 构建 zip 绿色版
         shell: bash
         env:
           VUE_APP_NETEASE_API_URL: /api
@@ -64,8 +63,6 @@ jobs:
       - name: 归档
         uses: actions/upload-artifact@v6
         with:
-          name: YesPlayMusic-EInk-win-portable
-          path: |
-            dist_electron/*-win-x64.exe
-            dist_electron/*-win-x64.zip
+          name: YesPlayMusic-EInk-win-zip
+          path: dist_electron/*-win-x64.zip
           if-no-files-found: error
