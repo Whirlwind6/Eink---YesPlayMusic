@@ -14,6 +14,8 @@ name: Build Windows Zip (E-Ink)
 #      （checkout@v5、setup-node@v5、upload-artifact@v6），消掉
 #      "Node.js 20 is deprecated" 告警。注意 upload-artifact 的 v5 仍是 node20，
 #      必须 v6 才消。
+#   4. 去掉 @unblockneteasemusic/rust-napi 依赖，因此删掉上游"补装 Windows 版
+#      解锁模块"那一步（原来要给 CI 单独装 win32-x64-msvc 的 .node）。
 
 on:
   push:
@@ -38,15 +40,6 @@ jobs:
       - name: 安装依赖
         run: yarn --ignore-optional --network-timeout 600000
         shell: bash
-
-      - name: 补装 Windows 版解锁模块
-        # @unblockneteasemusic/rust-napi 是可选依赖，CI 上默认只装宿主平台那份；
-        # 不显式补装 win32-x64 变体，打包时会缺 .node 文件导致启动崩溃。
-        shell: bash
-        run: |
-          unm_version=$(node -e "console.log(require('./node_modules/@unblockneteasemusic/rust-napi/package.json').version)")
-          yarn add --ignore-platform --ignore-optional \
-            @unblockneteasemusic/rust-napi-win32-x64-msvc@${unm_version}
 
       - name: 构建 zip 绿色版
         shell: bash

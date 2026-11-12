@@ -1,62 +1,122 @@
 # YesPlayMusic 墨水屏（E-Ink）适配说明
 
-版本 `0.4.11-eink.3`｜源码目录 `ypm-eink/`｜产物 `YesPlayMusic-EInk-0.4.11-eink.3-win-x64.zip`
+版本 `0.4.11-eink.4`｜源码目录 `ypm-eink/`｜产物 `YesPlayMusic-EInk-0.4.11-eink.4-win-x64.zip`
 
-本轮只解决四件事，其余部分与上一版一致：
+本轮三件事：
 
 | 反馈 | 处理 | 涉及文件 |
 |---|---|---|
-| 只留 zip 产物 | `win.target` 只保留 `zip`，CI 只归档 zip | `vue.config.js`、`.github/workflows/build.yaml` |
-| 扫码登录显示不出二维码 | 二维码改 PNG 纯黑白、固定尺寸、失败可重试；补上 `os=pc` 设备标识 | `views/loginAccount.vue`、`api/auth.js` |
-| 去掉「默认关闭 Apple Music 歌单」 | 默认值、首页条件、设置页 getter 全部回滚，并清掉上一版写进存档的 `false` | `store/*`、`views/home.vue`、`views/settings.vue` |
-| 内存占用偏大 | 关 GPU 加速、关拼写检查、跳过封面取色（三处低风险改动） | `background.js`、`FMCard.vue`、`lyrics.vue` |
+| 连不上网：首页没歌单、登录不了 | **根因：请求 baseURL 是空的**，所有接口在发出前就抛错。已加 `/api` 兜底 | `src/utils/request.js`、`src/background.js` |
+| 去掉 rust-napi 解锁模块 | 整条解灰链路、依赖、CI 步骤、设置页 UI 全部移除 | 11 个文件，-576 行 |
+| 只出 zip | 上一轮已完成，本轮不变 | — |
+
+> **先纠正上一轮的判断。** 上次你说二维码不显示，我归因于「蓝色 SVG 在灰阶屏上看不清」，改成了纯黑白 PNG。那个改动是必要的，但**不是根因**——这一轮才查清楚：**整个应用的请求一条都没发出去**，二维码只是最先暴露的地方。所以上一版改完二维码你还是登不上，因为取码请求本身就失败了。
 
 ---
 
-## 一、二维码为什么显示不出来
+## 一、真正的原因：所有接口都没发出去
 
-先做了路径排查：把 NCM API 单进程起在 10754、按应用的方式套一层 `express-http-proxy`，用应用里一模一样的请求打 `/api/login/qr/key`，返回是正常的：
+`src/utils/request.js` 里：
 
-```json
-{"data":{"code":200,"unikey":"a8b9ed95-…"},"code":200}
+```js
+let baseURL = '';
+if (process.env.IS_ELECTRON) {
+  if (process.env.NODE_ENV === 'production') {
+    baseURL = process.env.VUE_APP_ELECTRON_API_URL;   // ← 构建时注入，可能是 undefined
+  }
+  ...
+}
 ```
 
-把渲染层单独构建出来在 Chromium 里跑，二维码**能**画出来，但你那版画出来是这个样子：`#335eea` 的蓝色码点，压在 `#ededed` 的浅灰卡片上，`192px`、SVG 里是 **1px 描边**画出来的格子。灰度墨水屏上蓝色只剩三成黑，再叠一层抗锯齿，就是一片看不清的灰。所以问题不是「没生成」，而是「生成了，但在你的屏幕上看不见」。
+`VUE_APP_ELECTRON_API_URL` 不是运行时读的配置，是 **webpack 在打包时把字面量烧进代码**的。而这个仓库的 `.gitignore` 里写着 `.env`（上游为了不泄露 Last.fm key 一直这么做），所以只要构建环境没显式传这个变量，表达式就会变成 `baseURL = undefined`。
 
-另外查到一个更要命的问题：网易云在 2025 年中改过扫码接口，请求里不带设备标识时，轮询接口 `/login/qr/check` 直接返回 `404 Not Found`——**手机扫了也不会有任何反应**。带上 `os=pc` 就正常返回 `801 等待扫码`：
+接下来是致命的一步——请求拦截器：
+
+```js
+if (baseURL.length) {   // undefined.length → TypeError
+```
+
+axios 的请求拦截器里抛错，**请求根本不会发出去**，异常直接被 reject 回调用方。于是：
+
+| 页面 | 表现 |
+|---|---|
+| 首页 | `getPersonalizedPlaylist` 全部失败 → 一个歌单都没有 |
+| 搜索 | 无结果 |
+| 登录页 | 取不到 `unikey` → 二维码空白 |
+| 设置页 | 正常（不联网） |
+
+这跟你描述的完全一致：「不仅无法登录，似乎也连接不上网络，主界面完全没有歌单」。而你下载的原版正常，是因为官方 release 是在带 `env:` 的 CI 里构建的，那个值烧进去的是 `/api`。
+
+### 改法
+
+```js
+baseURL = process.env.VUE_APP_ELECTRON_API_URL || '/api';
+```
+
+`'/api'` 在这里永远正确：窗口本身就是由主进程里那个 express 在 `127.0.0.1:27232` 提供的，它把 `/api` 反代到 `127.0.0.1:10754` 的 NCM 服务。用相对路径还能顺带免疫端口被改的情况。dev 分支和 web 分支也各加了兜底，避免同一个坑再踩一次。
+
+另外给主进程的 API 启动挂了 `catch`：
+
+```js
+this.neteaseMusicAPI = startNeteaseMusicApi()
+  .then(() => log('NCM API ready on 127.0.0.1:10754'))
+  .catch(err => log(`NCM API failed to start: ${err?.message ?? err}`));
+```
+
+原来这行是裸调用，服务起不来只会变成一条 unhandled rejection，日志里什么都看不到——排查时会误以为是网络问题。现在启动成功或失败都有一行明确的日志。
+
+### 怎么验证的
+
+这次构建**故意把 `.env` 移走、`VUE_APP_*` 一个都不传**，然后按应用的方式把产物挂起来跑：
+
+```bash
+node -e "require('@neteaseapireborn/api/server').serveNcmApi({port:10754, moduleDefs: require('./src/ncmModDef')})"
+# express 静态托管 dist + /api 反代到 10754
+```
+
+结果首页歌单、每日推荐、私人 FM 全部正常，登录页二维码正常出图（见 `首页-歌单正常.png`、`登录页-二维码效果.png`）。也就是说：**即使构建环境一个变量都没给，包也能用**。
+
+## 二、二维码（上一轮的改动，保留）
+
+虽然根因在上面，这两个改动仍然必要：
+
+1. **格式**：`QRCode.toString`（SVG，1px 描边）换成 `QRCode.toDataURL`（PNG，440px、纯黑 `#000000`、纯白底、`margin: 4` 静区），显示固定 220px。灰阶屏上 1px 描边的 SVG 会糊成一片灰。
+2. **设备标识**：网易云 2025 年中改过扫码接口，不带设备标识时轮询直接 404：
 
 ```
 GET /login/qr/check?key=…&cookie=os%3Dpc                       → {"code":404,"msg":"Not Found"}
 GET /login/qr/check?key=…&cookie=os%3Dpc%3B%20appver%3D8.9.70  → {"code":801,"message":"等待扫码"}
 ```
 
-也就是说，上一版即使二维码看得见，扫码也是白扫。两处都改了。
+`src/api/auth.js` 里的 `QR_DEVICE_COOKIE = 'os=pc; appver=8.9.70'`，key 和 check 用同一串，否则会话对不上。
 
-### 改法
+失败时灰框里给「获取失败，点击重试」按钮，切换登录方式再切回来也会重新取码。
 
-`api/auth.js`——key 和 check 用同一串设备 cookie，否则会话对不上：
+## 三、去掉 rust-napi 解锁模块
 
-```js
-const QR_DEVICE_COOKIE = 'os=pc; appver=8.9.70';
-```
+原版的「解除网易云音乐限制」（灰歌换音源）靠 `@unblockneteasemusic/rust-napi`——一个几十兆的原生 `.node`，由主进程常驻加载。
 
-`views/loginAccount.vue`——`QRCode.toString`（SVG）换成 `QRCode.toDataURL`（PNG）：
+### 删了什么
 
-| | 上一版 | 现在 |
-|---|---|---|
-| 格式 | SVG data URI，1px 描边 | PNG，440px 位图 |
-| 颜色 | `#335eea` 蓝 / 透明底 | `#000000` 纯黑 / `#ffffff` 纯白 |
-| 白边 | `margin: 0`（没有静区） | `margin: 4`（4 个模块的静区，扫码器需要） |
-| 显示尺寸 | 192px，`loading="lazy"` | 220px，固定宽高，随页面缩放 |
-| 失败时 | 空白灰框，控制台一行错误 | 灰框里给「获取失败，点击重试」按钮 + 文字提示 |
+| 位置 | 内容 |
+|---|---|
+| `src/electron/ipcMain.js` | `import UNM`、`new UNM.Executor()`、`ipcMain.handle('unblock-music')` 整个 handler，以及只服务于它的 `toBuffer` / `getBiliVideoFile` / `parseSourceStringToList`（-127 行） |
+| `src/utils/Player.js` | `_getAudioSourceFromUnblockMusic()` 整个方法，播放源回退链去掉这一环（-81 行） |
+| `package.json` | `@unblockneteasemusic/rust-napi` 依赖 |
+| `vue.config.js` | `externals` 里的对应项 |
+| `.github/workflows/build.yaml` | 「补装 Windows 版解锁模块」整个步骤（原来要给 CI 单独装 `win32-x64-msvc` 变体） |
+| `src/views/settings.vue` | UnblockNeteaseMusic 整块配置 UI（音源、FLAC、搜索模式、joox/QQ cookie、yt-dlp、代理），以及 8 个 computed（-272 行） |
+| `src/store/initLocalStorage.js` | `enableUnblockNeteaseMusic` 默认值 |
 
-顺手补了两处：取码失败后切到手机登录再切回来会重新取码（原来只重启轮询，永远好不了）；`checkQrCodeLogin` 只在拿到 key 之后才启动。
+`yarn.lock` 同步更新，`@unblockneteasemusic/rust-napi` 已经一处不剩（`grep -c` 为 0）。
 
-> 实测截图见 `登录页-二维码效果.png`。这是构建产物在 Chromium 里的实际渲染，不是设计稿。
+### 影响
 
-## 二、只出 zip
+- **灰歌**（无版权 / VIP 专属）不再找替代音源，直接试听片段或者跳过。列表里这类歌会显示成灰色，`TrackListItem.vue` 的判断已改成恒 `true`（原来依赖那个被删掉的设置项）。
+- 设置页不再有 UnblockNeteaseMusic 区块，其余设置项位置不变。
+- `@neteaseapireborn/api` 自己还依赖一个**纯 JS** 的 `@unblockneteasemusic/server`（2MB），但它只在你显式传 `unblock=true` 时才会被 require，且已不再拉 rust-napi。留着不影响内存，删了反而可能要改 API 包的内部逻辑，所以没动。
 
-`vue.config.js`：
+## 四、只出 zip（上一轮已完成）
 
 ```js
 win: {
@@ -65,62 +125,34 @@ win: {
 }
 ```
 
-`portable` 和 `nsis` 都从 target 里拿掉了（`nsis` 配置块留着，要恢复安装包把它加回 target 即可）。
+`portable` 和 `nsis` 都从 target 里拿掉了（`nsis` 配置块留着，要恢复安装包把它加回 target 即可）。CI 归档只收 `dist_electron/*-win-x64.zip`。
 
-CI 的归档步骤同步收窄：
+解压后直接双击 `YesPlayMusic.exe`，不写注册表、不建快捷方式，也不往 `%TEMP%` 解压自身。
 
-```yaml
-- name: 归档
-  uses: actions/upload-artifact@v6
-  with:
-    name: YesPlayMusic-EInk-win-zip
-    path: dist_electron/*-win-x64.zip
-```
+## 五、内存占用
 
-产物 `YesPlayMusic-EInk-0.4.11-eink.3-win-x64.zip` 解压后直接双击里面的 `YesPlayMusic.exe`，不写注册表、不建快捷方式，也不往 `%TEMP%` 解压自身，所以启动比单文件版快。
+### 已经做了的
 
-## 三、Apple Music 歌单恢复默认显示
-
-上一版加的「默认关闭」整个去掉了，四处全部回滚到上游：
-
-| 位置 | 现在 |
-|---|---|
-| `store/initLocalStorage.js` | `showPlaylistsByAppleMusic: true` |
-| `views/home.vue` | `v-if="settings.showPlaylistsByAppleMusic !== false"` |
-| `views/settings.vue` | getter 缺省值 `true` |
-| `store/index.js` | 删掉强制关闭的迁移 |
-
-设置页里那个开关保留，你想关随时关。
-
-**额外处理了一个坑**：上一版会把 `false` 写进 localStorage 并且打上 `einkDefaultsApplied` 标记。只改默认值的话，你机器上那份存档仍然是 `false`，首页还是不出来。所以留了六行一次性清理：看到那个标记且值是 `false`，就把这条设置删掉、让默认值生效，然后销毁标记。只认这个标记，不会动更早版本里你自己关掉的值。
-
-## 四、内存占用
-
-先说结论：**能省一点，但省不到「小一半」那种程度**。这个应用的大头不在界面。
-
-### 做了三件事（都是低风险）
-
-1. **关掉 GPU 硬件加速**（`background.js` 里 `app.disableHardwareAcceleration()`）。Windows 上直接少一个 GPU 进程，任务管理器从 5 个进程变 4 个，通常能省 80–150MB。墨水屏界面全是纯色块、没有动画，软件光栅化完全够用；模糊和半透明在前几轮已经全部去掉了，不依赖 GPU 合成。
-   *副作用：MV 走软解，CPU 会高一些。这个设备上基本不看 MV。*
-2. **关掉拼写检查**（`webPreferences.spellcheck: false`）。Electron 会为它常驻加载 hunspell 词典，约 30–60MB。这个应用只有搜索框和登录框，用不上。
-3. **跳过封面取色**（`FMCard.vue`、`lyrics.vue` 里给 `getColor` / `getCoverColor` 加了 `if (EINK) return`）。`node-vibrant` 每次换歌都会起一个 Web Worker、解一张 512×512 的封面来算渐变色——而这两个地方的渐变早就被 `eink.scss` 关成纯白了，纯属白算。
-
-合计估计 **130–200MB**，占总量两成上下。这个数是按 Electron 进程结构估的，不是在你机器上实测的——我这边没有 Windows 环境跑它。
-
-### 没做的事，以及为什么
-
-| 想法 | 能省 | 为什么不建议 |
+| 改动 | 估计省 | 副作用 |
 |---|---|---|
-| 干掉内置的 NCM API 服务 | 200–300MB | 它跑在主进程里，承载所有在线功能。删掉等于只能听本地文件 |
-| 去掉 `@unblockneteasemusic/rust-napi` 原生模块 | 50–100MB | 灰歌替换全靠它，去掉后大量歌不能播 |
-| 路由改懒加载、组件按需引入 | 20–40MB | 要动几十个文件，收益不成比例，回归风险高 |
-| 限制 V8 堆大小 | 0（只是提前 OOM） | 只会让它在大列表页崩掉 |
+| `app.disableHardwareAcceleration()`，Windows 上少一个 GPU 进程（5 → 4） | 80–150MB | MV 走软解，CPU 略高 |
+| `webPreferences.spellcheck: false`，不加载 hunspell 词典 | 30–60MB | 无（只有搜索框和登录框） |
+| `FMCard` / `lyrics` 跳过 `node-vibrant` 取色 | 30–50MB | 无（那两处渐变早已被 CSS 关成纯白） |
+| **去掉 rust-napi 原生模块**（本轮） | 50–100MB | 灰歌不能换源 |
 
-如果你觉得 130–200MB 这个量级不值得承担「万一把 GPU 关掉有渲染问题」的风险，把 `background.js` 里那行 `app.disableHardwareAcceleration()` 删掉就回到原状，其余两处可以留着——它们没有可见副作用。
+合计估计 **180–300MB**。这个数是按 Electron 进程结构估的，不是在你机器上实测——我这边没有 Windows 环境。
 
----
+### 没做的
 
-## 五、前面几轮已经做过的（保持不动）
+| 想法 | 能省 | 为什么不动 |
+|---|---|---|
+| 干掉内置的 NCM API 服务 | 200–300MB | 它承载所有在线功能，删了等于只能听本地文件 |
+| 路由懒加载、组件按需引入 | 20–40MB | 要动几十个文件，回归风险不成比例 |
+| 限制 V8 堆大小 | 0 | 只是把 OOM 提前 |
+
+如果关掉 GPU 加速后觉得渲染有异常，删掉 `background.js` 里 `app.disableHardwareAcceleration()` 那一行就回原状，其余几处没有可见副作用。
+
+## 六、前面几轮已经做过的（保持不动）
 
 - **去封面**：`.cover` 等 8 类元素 `display:none`，容器没有固定高度会自然塌陷，不留空位；网格间距从 `44px` 收到 `12px`。
 - **去深色**：`appearance` 锁 `light`，`data-theme="dark"` 的局部变量统一覆盖；弹层改成白底黑边、去掉毛玻璃。
@@ -128,45 +160,48 @@ CI 的归档步骤同步收窄：
 - **设置页缩放控件**：80/90/100/110/125 五档，存 `settings.zoomFactor`。
 - **登录 / 设置入口**：`.avatar` 被隐藏后原版菜单没有入口，顶栏右侧补了文字按钮（未登录「登录」、已登录「昵称 / 登出」，右侧固定「设置」）。
 - **关掉自动更新**：`EINK_BUILD` 时跳过 `checkForUpdates()`。
+- **Apple Music 歌单默认显示**（上一轮回滚）。
 
-## 六、改动清单（相对上一版）
+## 七、改动清单（相对上一版 eink.3）
 
 ```
-.github/workflows/build.yaml  |  17 +++----   只归档 zip
-package.json                  |   2 +-        0.4.11-eink.3
-src/api/auth.js               |  12 +++++     os=pc 设备标识
-src/background.js             |  13 +++++     关 GPU 加速、关拼写检查
-src/components/FMCard.vue     |   4 ++        跳过封面取色
-src/store/index.js            |  16 +++----   删强制关闭，加一次性清理
-src/store/initLocalStorage.js |   4 +-        默认值回 true
-src/views/home.vue            |   2 +-        条件回滚
-src/views/loginAccount.vue    | 104 ++++++++++++++++++++++-----   二维码
-src/views/lyrics.vue          |   4 ++        跳过封面取色
-src/views/settings.vue        |   3 +-        getter 缺省值回 true
-vue.config.js                 |  13 ++----    win.target 只留 zip
+.github/workflows/build.yaml     |  11 +-     删掉补装解锁模块的步骤
+package.json                     |   3 +-     0.4.11-eink.4，删 rust-napi
+src/background.js                |  11 +-     API 启动加 then/catch 日志
+src/components/TrackListItem.vue |   5 +-     灰歌样式恒显示
+src/electron/ipcMain.js          | 127 +----   删 unblock-music
+src/store/initLocalStorage.js    |   1 -      删 enableUnblockNeteaseMusic
+src/utils/Player.js              |  81 +----   删解灰链路
+src/utils/request.js             |  20 ++-    baseURL 兜底
+src/views/settings.vue           | 272 +-----  删 UnblockNeteaseMusic 配置区
+vue.config.js                    |   1 -      删 externals
+yarn.lock                        |  84 +----   同步
 ```
 
-补丁：`ypm-eink-round3.patch`（相对上一版的增量，12 文件 141 行）、`ypm-eink.patch`（相对上游 master 的全量）。
+补丁：`ypm-eink-round4.patch`（相对 eink.3 的增量，11 文件 +40/-576）、`ypm-eink.patch`（相对上游 master 的全量）。
+两个都做过 `git apply` + 全目录 `diff` 比对，与 `ypm-eink/` 逐字节一致。
 
-## 七、构建
+## 八、构建
 
 推到自己的仓库，**Actions → Build Windows Zip (E-Ink) → Run workflow**（push 任意分支也会自动跑），跑完在 Artifacts 里下 `YesPlayMusic-EInk-win-zip`。
 
 - 只跑 `windows-latest`，不需要 mac / ubuntu
-- 用的是 `yarn electron:build-win`，不依赖那个已经停更的第三方打包 action
-- 需要 `.env` 里的 `VUE_APP_ELECTRON_API_URL=/api` 等几个变量，工作流里已经用 `env:` 直接给了，不用再 `cp .env.example .env`
+- 用 `yarn electron:build-win`，不依赖那个已经停更的第三方打包 action
+- 工作流里仍然用 `env:` 给了 `VUE_APP_ELECTRON_API_URL=/api` 等几个变量（Last.fm 需要 key），但**现在即使漏了也不会白屏**，只是 Last.fm 授权会失效
 
 本地（Windows / Node 16）也可以：
 
 ```bash
 yarn install
 yarn electron:build-win
-# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.3-win-x64.zip
+# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.4-win-x64.zip
 ```
 
-## 八、已知限制
+## 九、已知限制
 
-- 封面只是**不显示**，网络请求还在发（`node-vibrant` 那两处已经跳过，其余列表页仍会下载封面图）。要彻底不发请求得动图片加载层，收益是流量不是内存。
-- 列表项的 hover 过渡（0.3s）没有关，墨水屏上是一道灰影，不影响使用。
-- 二维码用手机扫的时候把前光调亮一点成功率更高；这是墨水屏的固有问题，不是二维码本身。
-- 网易云接口随时可能再变。如果哪天扫码又不行了，先用「手机 / 邮箱登录」顶一下；`os=pc` 这个标识如果失效，改 `src/api/auth.js` 里的 `QR_DEVICE_COOKIE` 一处即可。
+- **灰歌不能播放**：这是本轮去掉 rust-napi 的代价，无解。
+- 封面只是**不显示**，网络请求还在发（`node-vibrant` 那两处已跳过取色，其余列表页仍会下载封面图）。
+- 列表项 hover 的 0.3s 过渡没关，墨水屏上是一道灰影，不影响使用。
+- 二维码建议把前光调亮再扫，这是墨水屏的固有问题。
+- 网易云接口随时可能再变。扫码若再失效，先用「手机 / 邮箱登录」顶一下；`os=pc` 这串在 `src/api/auth.js` 的 `QR_DEVICE_COOKIE`，改一处即可。
+- 如果哪天又出现「页面全空」，先看主进程日志有没有 `NCM API ready on 127.0.0.1:10754`；没有就是端口被占或服务起不来，不是网络问题。

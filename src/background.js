@@ -120,7 +120,16 @@ class Background {
     app.disableHardwareAcceleration();
 
     // start netease music api
-    this.neteaseMusicAPI = startNeteaseMusicApi();
+    //
+    // 【墨水屏】这里必须挂 catch。内置的 NCM API 服务是本应用唯一的取数通道
+    // （express 把 /api 代理到 127.0.0.1:10754），它起不来时窗口照样会打开，
+    // 但每一页都是空的、二维码也取不到，表面看像"连不上网"。不 catch 的话
+    // 失败只会变成一条 unhandled rejection，日志里根本看不出发生了什么。
+    this.neteaseMusicAPI = startNeteaseMusicApi()
+      .then(() => log('NCM API ready on 127.0.0.1:10754'))
+      .catch(err => {
+        log(`NCM API failed to start: ${err?.message ?? err}`);
+      });
 
     // create Express app
     this.createExpressApp();

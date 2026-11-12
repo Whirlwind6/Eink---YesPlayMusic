@@ -6,12 +6,26 @@ let baseURL = '';
 // Web 和 Electron 跑在不同端口避免同时启动时冲突
 if (process.env.IS_ELECTRON) {
   if (process.env.NODE_ENV === 'production') {
-    baseURL = process.env.VUE_APP_ELECTRON_API_URL;
+    // 【墨水屏】must have a fallback.
+    //
+    // These VUE_APP_* values are baked in at build time by webpack. The repo
+    // gitignores `.env`, so if the build machine happens to lack it (CI step
+    // forgot to export the env, someone ran `yarn build` by hand, ...), the
+    // expression collapses to `undefined` and the request interceptor below
+    // throws on `baseURL.length` — every single API call dies before it is
+    // sent. Symptom: empty home page, blank QR code, login impossible, even
+    // though the bundled NCM API service is running fine.
+    //
+    // '/api' is always correct here: the window itself is served by the
+    // in-process express app on 127.0.0.1:27232, which proxies /api to the
+    // NCM service on 127.0.0.1:10754.
+    baseURL = process.env.VUE_APP_ELECTRON_API_URL || '/api';
   } else {
-    baseURL = process.env.VUE_APP_ELECTRON_API_URL_DEV;
+    baseURL =
+      process.env.VUE_APP_ELECTRON_API_URL_DEV || 'http://127.0.0.1:10754';
   }
 } else {
-  baseURL = process.env.VUE_APP_NETEASE_API_URL;
+  baseURL = process.env.VUE_APP_NETEASE_API_URL || '/api';
 }
 
 const service = axios.create({

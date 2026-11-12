@@ -192,9 +192,8 @@ export default {
       );
     },
     showUnavailableSongInGreyStyle() {
-      return process.env.IS_ELECTRON
-        ? !this.$store.state.settings.enableUnblockNeteaseMusic
-        : true;
+      // 【墨水屏】解灰模块（rust-napi）已移除，不可播放的歌一律按灰色样式提示。
+      return true;
     },
     showLikeButton() {
       return this.type !== 'tracklist' && this.type !== 'cloudDisk';
