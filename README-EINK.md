@@ -1,6 +1,6 @@
 # YesPlayMusic 墨水屏（E-Ink）适配说明
 
-版本 `0.4.11-eink.4`｜源码目录 `ypm-eink/`｜产物 `YesPlayMusic-EInk-0.4.11-eink.4-win-x64.zip`
+版本 `0.4.11-eink.5`｜源码目录 `ypm-eink/`｜产物 `YesPlayMusic-EInk-0.4.11-eink.5-win-x64.zip`
 
 本轮三件事：
 
@@ -162,23 +162,31 @@ win: {
 - **关掉自动更新**：`EINK_BUILD` 时跳过 `checkForUpdates()`。
 - **Apple Music 歌单默认显示**（上一轮回滚）。
 
-## 七、改动清单（相对上一版 eink.3）
+## 七、改动清单
+
+相对上一版 eink.4，本轮只动了构建链路：
 
 ```
-.github/workflows/build.yaml     |  11 +-     删掉补装解锁模块的步骤
-package.json                     |   3 +-     0.4.11-eink.4，删 rust-napi
+.github/workflows/build.yaml |  60 ++-   显式 --win zip --x64；加产物诊断与 7z 兜底
+package.json                 |   4 +-    electron:build-win 带 zip --x64；版本 0.4.11-eink.5
+README-EINK.md               |  34 ++    同步本文件
+```
+
+再往前一轮（eink.3 → eink.4）改的是请求地址与解锁模块：
+
+```
+src/utils/request.js             |  20 ++-    baseURL 兜底（本轮「连不上网」的根因）
+src/electron/ipcMain.js          | 127 +----   删 unblock-music
+src/utils/Player.js              |  81 +----   删解灰链路
+src/views/settings.vue           | 272 +-----  删 UnblockNeteaseMusic 配置区
 src/background.js                |  11 +-     API 启动加 then/catch 日志
 src/components/TrackListItem.vue |   5 +-     灰歌样式恒显示
-src/electron/ipcMain.js          | 127 +----   删 unblock-music
 src/store/initLocalStorage.js    |   1 -      删 enableUnblockNeteaseMusic
-src/utils/Player.js              |  81 +----   删解灰链路
-src/utils/request.js             |  20 ++-    baseURL 兜底
-src/views/settings.vue           | 272 +-----  删 UnblockNeteaseMusic 配置区
 vue.config.js                    |   1 -      删 externals
 yarn.lock                        |  84 +----   同步
 ```
 
-补丁：`ypm-eink-round4.patch`（相对 eink.3 的增量，11 文件 +40/-576）、`ypm-eink.patch`（相对上游 master 的全量）。
+补丁：`ypm-eink-round5.patch`（相对 eink.4 的增量）、`ypm-eink.patch`（相对上游 master 的全量）。
 两个都做过 `git apply` + 全目录 `diff` 比对，与 `ypm-eink/` 逐字节一致。
 
 ## 八、构建
@@ -186,7 +194,7 @@ yarn.lock                        |  84 +----   同步
 推到自己的仓库，**Actions → Build Windows Zip (E-Ink) → Run workflow**（push 任意分支也会自动跑），跑完在 Artifacts 里下 `YesPlayMusic-EInk-win-zip`。
 
 - 只跑 `windows-latest`，不需要 mac / ubuntu
-- 用 `yarn electron:build-win`，不依赖那个已经停更的第三方打包 action
+- 构建命令是 `yarn electron:build --win zip --x64`，**target 显式写在命令行里**
 - 工作流里仍然用 `env:` 给了 `VUE_APP_ELECTRON_API_URL=/api` 等几个变量（Last.fm 需要 key），但**现在即使漏了也不会白屏**，只是 Last.fm 授权会失效
 
 本地（Windows / Node 16）也可以：
@@ -194,8 +202,24 @@ yarn.lock                        |  84 +----   同步
 ```bash
 yarn install
 yarn electron:build-win
-# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.4-win-x64.zip
+# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.5-win-x64.zip
 ```
+
+### 归档报 "No files were found with the provided path" 是怎么回事
+
+上一版 CI 构建步骤 exit 0、日志也打了 Build complete，但 `dist_electron` 里没有 zip，归档于是报错。原因是 `vue.config.js` 里的 `win.target` **只是声明，不是命令**：
+
+`vue-cli-service electron:build -w` 里的 `-w` 不带 target 时，yargs 把它解析成空数组，electron-builder 收到 `win: []` 后会**回落到配置文件里的 `win.target`**。所以决定打什么包的是配置——仓库里那份 `vue.config.js` 只要还是带 `nsis`/`portable` 的旧版，产出的就是 `Setup.exe`，zip 永远不会出现。实测三种写法的解析结果：
+
+| 命令行 | electron-builder 实际打的包 |
+|---|---|
+| `-w`（无 target），配置还是 `nsis` | `x64 → ['nsis']` |
+| `-w`（无 target），配置是 `zip` | `x64 → ['zip']` |
+| `-w zip --x64` | `x64 → ['zip']`（**无视配置**） |
+
+现在三处一起锁死：CI 命令显式 `--win zip --x64`、`package.json` 的 `electron:build-win` 也带上 `zip --x64`、`vue.config.js` 的 `win.target` 只有 zip。这样即使哪天配置被覆盖，产物仍然是 zip。
+
+另外加了两步防御：构建后先 `ls dist_electron` 把实际产物打进日志；若真的只有 `win-unpacked` 没有压缩包，用 runner 自带的 7z 现场压一个再归档，不会再让整轮构建白跑。
 
 ## 九、已知限制
 

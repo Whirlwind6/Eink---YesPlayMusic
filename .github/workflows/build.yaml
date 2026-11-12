@@ -16,10 +16,23 @@ name: Build Windows Zip (E-Ink)
 #      必须 v6 才消。
 #   4. 去掉 @unblockneteasemusic/rust-napi 依赖，因此删掉上游"补装 Windows 版
 #      解锁模块"那一步（原来要给 CI 单独装 win32-x64-msvc 的 .node）。
+#   5. 构建命令里显式写死 --win zip --x64。
+#      vue.config.js 里的 win.target 只是"声明"，真正决定打什么包的是命令行参数。
+#      不写 target 时 electron-builder 会把 --win 解析成空 target 表再回落到配置，
+#      一旦仓库里的 vue.config.js 没同步（还是带 nsis 的旧版），产出的就是
+#      Setup.exe 而不是 zip，归档步骤于是报 "No files were found"。显式传参可以
+#      让产物不受配置文件版本影响。
+#   6. 归档前加兜底：万一 electron-builder 只做了 --dir 预处理（只有 win-unpacked
+#      目录、没有压缩包），就用 7z 现场压一个，保证 artifact 一定拿得到。
 
 on:
   push:
   workflow_dispatch:
+
+env:
+  # 没有代码签名证书，别让 electron-builder 去找，省一轮重试
+  # 值必须写成字符串，YAML 的布尔会被 runner 当成 null 处理
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
 jobs:
   build-windows:
@@ -49,13 +62,47 @@ jobs:
           VUE_APP_ELECTRON_API_URL_DEV: http://127.0.0.1:10754
           VUE_APP_LASTFM_API_KEY: 09c55292403d961aa517ff7f5e8a3d9c
           VUE_APP_LASTFM_API_SHARED_SECRET: 307c9fda32b3904e53654baff215cb67
-          # 没有代码签名证书，别让 electron-builder 去找，省一轮重试
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: yarn electron:build-win
+        # --win zip --x64 必须显式写：只写 -w 时 electron-builder 拿的是配置里的
+        # target，配置一旦没同步就打错包；--publish never 覆盖脚本里的 -p，
+        # 避免仓库 publish 配置指向别人的 repo 时去要 token。
+        run: yarn electron:build --win zip --x64 --publish never
+
+      - name: 查看构建产物
+        if: always()
+        shell: bash
+        run: |
+          echo "=== dist_electron ==="
+          ls -la dist_electron 2>/dev/null || echo "(目录不存在)"
+          echo "=== 根层压缩包 ==="
+          find dist_electron -maxdepth 1 -name '*.zip' 2>/dev/null || true
+          echo "=== 解包目录 ==="
+          ls -d dist_electron/*unpacked* 2>/dev/null || echo "(无)"
+
+      - name: 兜底打包
+        shell: bash
+        run: |
+          set -e
+          shopt -s nullglob
+          zips=(dist_electron/*.zip)
+          if [ ${#zips[@]} -gt 0 ]; then
+            echo "electron-builder 已产出：${zips[*]}"
+            exit 0
+          fi
+          echo "::warning::electron-builder 没有产出 zip，改从 win-unpacked 现场压缩"
+          if [ ! -d dist_electron/win-unpacked ]; then
+            echo "::error::dist_electron/win-unpacked 也不存在，构建没有产出任何 Windows 包"
+            exit 1
+          fi
+          version=$(node -p "require('./package.json').version")
+          out="YesPlayMusic-EInk-${version}-win-x64.zip"
+          sevenz="/c/Program Files/7-Zip/7z.exe"
+          [ -f "$sevenz" ] || sevenz="7z"
+          ( cd dist_electron/win-unpacked && "$sevenz" a -tzip -mx=5 "../${out}" ./* > /dev/null )
+          ls -lh "dist_electron/${out}"
 
       - name: 归档
         uses: actions/upload-artifact@v6
         with:
           name: YesPlayMusic-EInk-win-zip
-          path: dist_electron/*-win-x64.zip
+          path: dist_electron/*.zip
           if-no-files-found: error
