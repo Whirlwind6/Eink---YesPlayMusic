@@ -63,11 +63,20 @@ jobs:
           VUE_APP_LASTFM_API_KEY: 09c55292403d961aa517ff7f5e8a3d9c
           VUE_APP_LASTFM_API_SHARED_SECRET: 307c9fda32b3904e53654baff215cb67
         # --win zip --x64 必须显式写：只写 -w 时 electron-builder 拿的是配置里的
-        # target，配置一旦没同步就打错包；--publish never 覆盖脚本里的 -p，
-        # 避免仓库 publish 配置指向别人的 repo 时去要 token。
+        # target，配置一旦没同步就打错包。
+        #
+        # 千万不要在这里再追加 --publish never：package.json 的 electron:build
+        # 脚本里已经有 -p never。插件把命令行原样交给 electron-builder 的 yargs
+        # 解析，同一个选项出现两次会被解析成数组 ["never","never"]，而
+        # electron-builder 只做 `publish !== "never"` 的字符串比较，数组永远不等
+        # 于字符串，isPublish 因此被误判为 true；CI 上再叠加默认的 onTagOrDraft
+        # 策略，就会去 new GitHubPublisher，没有 GH_TOKEN 立刻抛
+        #   InvalidConfigurationError: GitHub Personal Access Token is not set
+        # ——zip 其实已经打好，但进程退出码 1，整步判失败。
+        # 现在 vue.config.js 里也删掉了 publish 配置，属于双保险。
         run: |
           set -o pipefail
-          yarn electron:build --win zip --x64 --publish never 2>&1 | tee build-electron.log
+          yarn electron:build --win zip --x64 2>&1 | tee build-electron.log
           # @vue/cli-plugin-electron-builder 在主进程 bundle 编译失败时只打一行
           # ERROR 就继续往下走，进程仍然 exit 0，electron-builder 因此根本没被调用，
           # dist_electron 里只剩一个 bundled 目录。不拦这一道，错误就会被伪装成

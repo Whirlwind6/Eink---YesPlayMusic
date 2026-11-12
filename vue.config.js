@@ -91,15 +91,17 @@ module.exports = {
         copyright: 'Copyright © YesPlayMusic',
         // compression: "maximum", // 机器好的可以打开，配置压缩，开启后会让 .AppImage 格式的客户端启动缓慢
         asar: true,
-        publish: [
-          {
-            provider: 'github',
-            owner: 'qier222',
-            repo: 'YesPlayMusic',
-            vPrefixedTagName: true,
-            releaseType: 'draft',
-          },
-        ],
+        // 【墨水屏】不配置 publish。上游这里指向 qier222/YesPlayMusic 的 GitHub
+        // Releases，那是官方发布通道，本定制版只手动分发 zip，用不上。
+        //
+        // 留着它会出事：electron-builder 23 在 CI 环境（CI=true）里如果没拿到
+        // 明确的发布策略，会自动按 onTagOrDraft 走发布流程，而 GitHubPublisher
+        // 的构造函数要求 GH_TOKEN，缺失时直接抛
+        //   InvalidConfigurationError: GitHub Personal Access Token is not set
+        // 此时 zip 其实已经打好了，但进程以退出码 1 结束，整个步骤判失败。
+        // 删掉 publish 后 getPublishConfigs 返回空数组，发布器根本不会被创建，
+        // 无论命令行参数怎么传都不可能触发上传。
+        // 自动更新不受影响：background.js 的 checkForUpdates 在 EINK_BUILD 下已提前 return。
         directories: {
           output: 'dist_electron',
         },
@@ -129,7 +131,6 @@ module.exports = {
           artifactName: 'YesPlayMusic-EInk-${version}-win-${arch}.${ext}',
           publisherName: 'YesPlayMusic',
           icon: 'build/icons/icon.ico',
-          publish: ['github'],
         },
         linux: {
           target: [

@@ -1,6 +1,6 @@
 # YesPlayMusic 墨水屏（E-Ink）适配说明
 
-版本 `0.4.11-eink.6`｜源码目录 `ypm-eink/`｜产物 `YesPlayMusic-EInk-0.4.11-eink.6-win-x64.zip`
+版本 `0.4.11-eink.7`｜源码目录 `ypm-eink/`｜产物 `YesPlayMusic-EInk-0.4.11-eink.7-win-x64.zip`
 
 本轮三件事：
 
@@ -164,7 +164,15 @@ win: {
 
 ## 七、改动清单
 
-相对上一版 eink.5，本轮只有三处：
+相对上一版 eink.6，本轮只有三处：
+
+```
+.github/workflows/build.yaml |  10 ++-   不再重复传 --publish never
+vue.config.js                |  18 ++-   删掉 publish 配置（指向别人仓库，且会触发上传）
+package.json                 |   2 +-   版本 0.4.11-eink.7
+```
+
+上一轮（eink.5 → eink.6）改的是打包静默失败：
 
 ```
 src/background.js            |   8 +-   去掉 ?. / ?? —— 打包静默失败的根因
@@ -186,7 +194,7 @@ vue.config.js                    |   1 -      删 externals
 yarn.lock                        |  84 +----   同步
 ```
 
-补丁：`ypm-eink-round6.patch`（相对 eink.5 的增量）、`ypm-eink.patch`（相对上游 master 的全量）。
+补丁：`ypm-eink-round7.patch`（相对 eink.6 的增量）、`ypm-eink.patch`（相对上游 master 的全量）。
 两个都做过 `git apply` + 全目录 `diff` 比对，与 `ypm-eink/` 逐字节一致。
 
 ## 八、构建
@@ -202,7 +210,7 @@ yarn.lock                        |  84 +----   同步
 ```bash
 yarn install
 yarn electron:build-win
-# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.6-win-x64.zip
+# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.7-win-x64.zip
 ```
 
 ### 打包失败的真正原因：一行可选链，让整个打包静默跳过
@@ -245,7 +253,68 @@ Module parse failed: Unexpected token (131:44)
 
 **以后主进程代码里别用 `?.`、`??`、`||=` 这些新语法**，渲染进程没事（babel 会按 browserslist 降级），但主进程会被 webpack 4 卡住。
 
-## 九、已知限制
+## 九、eink.7：zip 打好了却判失败——`--publish never` 传了两遍
+
+这一轮 CI 报在「构建 zip 绿色版」这一步，末尾是：
+
+```
+• building   target=zip arch=x64 file=dist_electron\YesPlayMusic-EInk-0.4.11-eink.6-win-x64.zip
+InvalidConfigurationError: GitHub Personal Access Token is not set, neither programmatically, nor using env "GH_TOKEN"
+    at new GitHubPublisher (electron-publish/src/gitHubPublisher.ts:47:15)
+    at PublishManager.artifactCreatedWithoutExplicitPublishConfig (PublishManager.ts:201:14)
+```
+
+注意 zip 那一行**已经打印出来了**：包其实打好了，是打完之后的「发布」环节把进程搞挂了，退出码 1，步骤判失败，产物也就没归档。本地之所以复现不出来，是因为 CI 环境有 `CI=true`。
+
+### 根因：同一个选项传两次，yargs 给出的是数组
+
+`package.json` 里 `electron:build` 脚本本身带 `-p never`，CI 又在后面追加了 `--publish never`：
+
+```
+vue-cli-service electron:build -p never --win zip --x64 --publish never
+```
+
+`vue-cli-plugin-electron-builder` 把命令行原样丢给 electron-builder 的 yargs 解析。同一个 key 出现两次，yargs 返回的是数组而不是字符串：
+
+```js
+yargs.command(['build','*'], 'Build', configureBuildCommand)
+     .parse(['-p','never','--win','zip','--x64','--publish','never'])
+// → publish: [ 'never', 'never' ]
+
+.parse(['-p','never','--win','zip','--x64'])
+// → publish: 'never'
+```
+
+而 electron-builder 只做字符串比较：
+
+```js
+this.isPublish = publishPolicy != null && publishOptions.publish !== "never" && ...
+```
+
+`['never','never'] !== "never"` 恒为 true，`isPublish` 被误判成「要发布」。`checkOptions()` 只校验字符串类型，数组直接放行，所以没有任何警告。接着因为命令行没给明确的发布策略，CI 环境自动套上 `onTagOrDraft`，于是去 `new GitHubPublisher`——没有 `GH_TOKEN`，构造函数当场抛错。
+
+> 一句话：**`--publish never` 加一次是关发布，加两次等于把开关掰断了。**
+
+### 改法
+
+1. `.github/workflows/build.yaml`：命令回到 `yarn electron:build --win zip --x64`，不再重复传 `--publish`（脚本里的 `-p never` 已经够用），并在注释里写清为什么不能加。
+2. `vue.config.js`：删掉 `publish` 配置（上游那两处指向 `qier222/YesPlayMusic`，是官方发布通道，本定制版从不发布）。删掉后 `getPublishConfigs()` 返回空数组，发布器根本不会被创建——**即使以后有人又把 `--publish` 传两遍，也炸不了**。自动更新不受影响，`checkForUpdates()` 在 `EINK_BUILD` 下本来就提前 return。
+
+### 怎么验证的
+
+在 Linux 上按真实命令跑了三组（`CI=true`，`--skipBundle` 复用已构建好的 `bundled/`）：
+
+| 配置 | 命令 | 结果 |
+|---|---|---|
+| 原配置（有 publish） | `-p never … --publish never` | **失败**，`Cannot detect repository…`（本机无 `.git`，CI 上就是 `GH_TOKEN` 那条） |
+| 原配置（有 publish） | `-p never …` | 成功，只打印一行提示，不抛错 |
+| 新配置（无 publish） | `-p never … --publish never` | 成功，`DONE Build complete!`，82MB zip |
+
+第二行是关键对照：**同样是原配置，只把重复的那个参数去掉就正常了**，说明问题不在 publish 配置本身，而在重复传参。
+
+本机验证时还发现另一件事（与 CI 无关）：Linux 上打 Windows 包，electron-builder 要调 wine 改 exe 图标，本机没装 wine 会报 `wine is required`。验证时临时加了 `signAndEditExecutable: false` 绕开，**这个开关没有进交付代码**——CI 跑在 `windows-latest` 上，不需要它。
+
+## 十、已知限制
 
 - **灰歌不能播放**：这是本轮去掉 rust-napi 的代价，无解。
 - 封面只是**不显示**，网络请求还在发（`node-vibrant` 那两处已跳过取色，其余列表页仍会下载封面图）。
