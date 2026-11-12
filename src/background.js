@@ -128,7 +128,12 @@ class Background {
     this.neteaseMusicAPI = startNeteaseMusicApi()
       .then(() => log('NCM API ready on 127.0.0.1:10754'))
       .catch(err => {
-        log(`NCM API failed to start: ${err?.message ?? err}`);
+        // 注意：这里不能用 err?.message / ?? —— 主进程走的是 webpack 4，
+        // 它的解析器不认识可选链和空值合并（babel 认为 Node 已原生支持，
+        // 不会转译），写进去会直接 Module parse failed，而插件又会把
+        // 这个错误吞掉、以 exit 0 结束，表现为"构建成功但什么都没有产出"。
+        const reason = err && err.message ? err.message : err;
+        log(`NCM API failed to start: ${reason}`);
       });
 
     // create Express app

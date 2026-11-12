@@ -65,7 +65,18 @@ jobs:
         # --win zip --x64 必须显式写：只写 -w 时 electron-builder 拿的是配置里的
         # target，配置一旦没同步就打错包；--publish never 覆盖脚本里的 -p，
         # 避免仓库 publish 配置指向别人的 repo 时去要 token。
-        run: yarn electron:build --win zip --x64 --publish never
+        run: |
+          set -o pipefail
+          yarn electron:build --win zip --x64 --publish never 2>&1 | tee build-electron.log
+          # @vue/cli-plugin-electron-builder 在主进程 bundle 编译失败时只打一行
+          # ERROR 就继续往下走，进程仍然 exit 0，electron-builder 因此根本没被调用，
+          # dist_electron 里只剩一个 bundled 目录。不拦这一道，错误就会被伪装成
+          # "归档找不到文件 / win-unpacked 不存在"，白跑一整轮。
+          # 最常见的触发原因是主进程代码用了 webpack 4 解析器不认识的语法（?. 和 ??）。
+          if grep -q "Failed to compile" build-electron.log; then
+            echo "::error::webpack 编译失败（通常是 src/background.js 等主进程文件），见上方日志"
+            exit 1
+          fi
 
       - name: 查看构建产物
         if: always()
@@ -91,6 +102,8 @@ jobs:
           echo "::warning::electron-builder 没有产出 zip，改从 win-unpacked 现场压缩"
           if [ ! -d dist_electron/win-unpacked ]; then
             echo "::error::dist_electron/win-unpacked 也不存在，构建没有产出任何 Windows 包"
+            echo "=== dist_electron 内容 ==="
+            ls -la dist_electron 2>/dev/null || echo "(目录不存在)"
             exit 1
           fi
           version=$(node -p "require('./package.json').version")

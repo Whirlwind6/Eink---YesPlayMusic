@@ -1,6 +1,6 @@
 # YesPlayMusic 墨水屏（E-Ink）适配说明
 
-版本 `0.4.11-eink.5`｜源码目录 `ypm-eink/`｜产物 `YesPlayMusic-EInk-0.4.11-eink.5-win-x64.zip`
+版本 `0.4.11-eink.6`｜源码目录 `ypm-eink/`｜产物 `YesPlayMusic-EInk-0.4.11-eink.6-win-x64.zip`
 
 本轮三件事：
 
@@ -164,29 +164,29 @@ win: {
 
 ## 七、改动清单
 
-相对上一版 eink.4，本轮只动了构建链路：
+相对上一版 eink.5，本轮只有三处：
 
 ```
-.github/workflows/build.yaml |  60 ++-   显式 --win zip --x64；加产物诊断与 7z 兜底
-package.json                 |   4 +-    electron:build-win 带 zip --x64；版本 0.4.11-eink.5
-README-EINK.md               |  34 ++    同步本文件
+src/background.js            |   8 +-   去掉 ?. / ?? —— 打包静默失败的根因
+.github/workflows/build.yaml |  25 ++-   拦截 Failed to compile；兜底失败时打印目录
+package.json                 |   2 +-   版本 0.4.11-eink.6
 ```
 
-再往前一轮（eink.3 → eink.4）改的是请求地址与解锁模块：
+再往前两轮（eink.3 → eink.5）改的是请求地址、解锁模块和构建参数：
 
 ```
 src/utils/request.js             |  20 ++-    baseURL 兜底（本轮「连不上网」的根因）
 src/electron/ipcMain.js          | 127 +----   删 unblock-music
 src/utils/Player.js              |  81 +----   删解灰链路
 src/views/settings.vue           | 272 +-----  删 UnblockNeteaseMusic 配置区
-src/background.js                |  11 +-     API 启动加 then/catch 日志
+src/background.js                |  11 +-     API 启动加 then/catch 日志（后来引入了 ?. ，见上）
 src/components/TrackListItem.vue |   5 +-     灰歌样式恒显示
 src/store/initLocalStorage.js    |   1 -      删 enableUnblockNeteaseMusic
 vue.config.js                    |   1 -      删 externals
 yarn.lock                        |  84 +----   同步
 ```
 
-补丁：`ypm-eink-round5.patch`（相对 eink.4 的增量）、`ypm-eink.patch`（相对上游 master 的全量）。
+补丁：`ypm-eink-round6.patch`（相对 eink.5 的增量）、`ypm-eink.patch`（相对上游 master 的全量）。
 两个都做过 `git apply` + 全目录 `diff` 比对，与 `ypm-eink/` 逐字节一致。
 
 ## 八、构建
@@ -202,24 +202,48 @@ yarn.lock                        |  84 +----   同步
 ```bash
 yarn install
 yarn electron:build-win
-# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.5-win-x64.zip
+# 产物：dist_electron/YesPlayMusic-EInk-0.4.11-eink.6-win-x64.zip
 ```
 
-### 归档报 "No files were found with the provided path" 是怎么回事
+### 打包失败的真正原因：一行可选链，让整个打包静默跳过
 
-上一版 CI 构建步骤 exit 0、日志也打了 Build complete，但 `dist_electron` 里没有 zip，归档于是报错。原因是 `vue.config.js` 里的 `win.target` **只是声明，不是命令**：
+前两轮 CI 都报"归档/兜底找不到文件"，我先后归因于 target 配置和输出目录，都不对。真正的原因在 `src/background.js`：
 
-`vue-cli-service electron:build -w` 里的 `-w` 不带 target 时，yargs 把它解析成空数组，electron-builder 收到 `win: []` 后会**回落到配置文件里的 `win.target`**。所以决定打什么包的是配置——仓库里那份 `vue.config.js` 只要还是带 `nsis`/`portable` 的旧版，产出的就是 `Setup.exe`，zip 永远不会出现。实测三种写法的解析结果：
+```js
+log(`NCM API failed to start: ${err?.message ?? err}`);
+```
 
-| 命令行 | electron-builder 实际打的包 |
+主进程的 bundle 走的是 **webpack 4**，它的解析器（acorn）不认识 `?.` 和 `??`；而 babel 认为 Node 14 已原生支持这两个语法，不做降级。于是主进程编译直接失败：
+
+```
+ERROR  Failed to compile with 1 errors
+ error  in ./src/background.js
+Module parse failed: Unexpected token (131:44)
+> log(`NCM API failed to start: ${err?.message ?? err}`);
+```
+
+**致命的是插件的处理方式**：它只打印这一行 ERROR，没有把失败传出去，进程照样 **exit 0**。于是 electron-builder 根本没被调用，`dist_electron` 里只留下 webpack 的 `bundled` 目录——没有 `win-unpacked`、没有 zip。CI 看到构建步骤成功，接着走归档，才报出"找不到文件"这个次生错误。
+
+本地按真实命令跑一遍就复现了：`EXIT:0`，`dist_electron` 里只有 `bundled`。把那一行改成 `err && err.message ? err.message : err` 之后重跑，同一条命令变成：
+
+```
+• packaging   platform=win32 arch=x64 electron=13.6.9 appOutDir=dist_electron/win-unpacked
+• building    target=zip arch=x64 file=dist_electron/YesPlayMusic-EInk-0.4.11-eink.6-win-x64.zip
+```
+
+产物 `win-unpacked/` + **84MB 的 zip**，确认链路通了。
+
+所以这一轮的改动是：
+
+| 位置 | 改了什么 |
 |---|---|
-| `-w`（无 target），配置还是 `nsis` | `x64 → ['nsis']` |
-| `-w`（无 target），配置是 `zip` | `x64 → ['zip']` |
-| `-w zip --x64` | `x64 → ['zip']`（**无视配置**） |
+| `src/background.js` | 去掉 `?.` / `??`，换成 ES5 写法；注释里写明原因，防止以后再写回去 |
+| `.github/workflows/build.yaml` | 构建步骤 `tee` 一份日志，出现 `Failed to compile` 就直接 `exit 1`，不再让错误伪装成"找不到文件" |
+| 兜底步骤 | 失败时额外打印 `dist_electron` 内容，下次一眼能看到卡在哪一步 |
 
-现在三处一起锁死：CI 命令显式 `--win zip --x64`、`package.json` 的 `electron:build-win` 也带上 `zip --x64`、`vue.config.js` 的 `win.target` 只有 zip。这样即使哪天配置被覆盖，产物仍然是 zip。
+上一轮加的"显式 `--win zip --x64`"和 7z 兜底保留——它们不是本次的原因，但确实是有效的加固（`-w` 不带 target 时，真正决定产物的是 `vue.config.js` 里的 `win.target`，配置没同步就会打错包）。
 
-另外加了两步防御：构建后先 `ls dist_electron` 把实际产物打进日志；若真的只有 `win-unpacked` 没有压缩包，用 runner 自带的 7z 现场压一个再归档，不会再让整轮构建白跑。
+**以后主进程代码里别用 `?.`、`??`、`||=` 这些新语法**，渲染进程没事（babel 会按 browserslist 降级），但主进程会被 webpack 4 卡住。
 
 ## 九、已知限制
 
